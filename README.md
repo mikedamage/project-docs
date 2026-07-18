@@ -1,0 +1,70 @@
+# project-doc-reference-rag
+
+Local RAG over the markdown docs of the projects you work on. Docs are segregated
+by project so queries only return context relevant to what you're building.
+
+- **Vector store:** [LanceDB](https://lancedb.github.io/lancedb/) — embedded, no
+  server process, persists to `./data`.
+- **Embeddings:** local [Ollama](https://ollama.com/) running `nomic-embed-text`
+  (768-dim; task prefixes applied automatically).
+- **Interfaces:** CLI scripts now; an MCP server (`src/mcp/server.ts`) later. Both
+  are thin wrappers over the same core classes in `src/core/`.
+
+## Architecture
+
+All logic lives in `src/core/`. Consumers (`src/cli/`, `src/mcp/`) only parse
+input and format output — they construct the same classes via `createRag()`.
+
+```
+src/core/
+  config.ts     env-overridable config (data dir, model, chunk sizes)
+  embedder.ts   Embedder interface + OllamaEmbedder
+  store.ts      VectorStore interface + LanceStore (one table per project)
+  chunker.ts    header-aware markdown chunking
+  ingestor.ts   walk docs -> chunk -> embed -> upsert (idempotent via file hash)
+  retriever.ts  embed query -> search within a project
+  index.ts      createRag() wiring point
+```
+
+Projects are isolated as separate LanceDB tables, so dropping a project is a
+single table delete and cross-project leakage is impossible.
+
+## Setup
+
+```bash
+npm install
+ollama pull nomic-embed-text   # if not already present
+```
+
+## Usage
+
+```bash
+# Ingest a project's docs
+npm run ingest -- --project my-app --dir ../my-app/docs
+
+# Query within a project
+npm run query -- --project my-app "how is auth configured?"
+npm run query -- --project my-app --json "how is auth configured?"
+
+# List the files indexed for a project (with chunk counts)
+npm run docs -- --project my-app
+npm run docs -- --project my-app --json
+
+# Manage projects
+npm run projects                    # list
+npm run projects -- --drop my-app   # delete
+```
+
+Re-running `ingest` only re-embeds files whose contents changed (tracked by a
+per-file sha256).
+
+## Config (env vars)
+
+| Var                    | Default                  |
+| ---------------------- | ------------------------ |
+| `RAG_DATA_DIR`         | `./data`                 |
+| `OLLAMA_URL`           | `http://localhost:11434` |
+| `RAG_EMBEDDING_MODEL`  | `nomic-embed-text`       |
+| `RAG_EMBEDDING_DIMS`   | `768`                    |
+| `RAG_CHUNK_SIZE`       | `1200`                   |
+| `RAG_CHUNK_OVERLAP`    | `150`                    |
