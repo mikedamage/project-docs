@@ -38,9 +38,14 @@ ollama pull nomic-embed-text   # if not already present
 
 ## Usage
 
+All commands are subcommands of a single `project-docs` CLI (`bin/project-docs.ts`,
+built with yargs). Run it directly, or via the `npm run` aliases.
+
 ```bash
-# Ingest a project's docs
-npm run ingest -- --project my-app --dir ../my-app/docs
+# Ingest a project's docs — any mix of files and directories.
+# Directories are walked recursively for markdown; named files are ingested as-is.
+npx tsx bin/project-docs.ts ingest --project my-app ../my-app/docs
+npm run ingest -- --project my-app ../my-app/docs ../shared/CONTRIBUTING.md
 
 # Query within a project
 npm run query -- --project my-app "how is auth configured?"
@@ -53,6 +58,9 @@ npm run docs -- --project my-app --json
 # Manage projects
 npm run projects                    # list
 npm run projects -- --drop my-app   # delete
+
+# Full help / command list
+npm run cli -- --help
 ```
 
 Re-running `ingest` only re-embeds files whose contents changed (tracked by a

@@ -1,4 +1,3 @@
-import path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -91,19 +90,24 @@ server.registerTool(
   {
     title: "Ingest project docs",
     description:
-      "Index (or re-index) a directory of markdown/MDX docs into a project. " +
-      "Idempotent: unchanged files are skipped. `dir` should be an absolute path.",
+      "Index (or re-index) markdown/MDX docs into a project from a mix of files " +
+      "and directories. Directories are walked recursively for markdown; " +
+      "explicitly-named files are ingested as-is. Idempotent: unchanged files " +
+      "are skipped. Use absolute paths (the server's working directory is not " +
+      "guaranteed).",
     inputSchema: {
       project: z.string().describe("Project id to ingest into."),
-      dir: z.string().describe("Absolute path to the docs directory."),
+      paths: z
+        .array(z.string())
+        .min(1)
+        .describe("Absolute paths to files and/or directories to ingest."),
     },
     annotations: { idempotentHint: true },
   },
-  async ({ project, dir }) => {
-    const docsDir = path.resolve(dir);
-    const report = await rag.ingestor.ingestDir(project, docsDir);
+  async ({ project, paths }) => {
+    const report = await rag.ingestor.ingestPaths(project, paths);
     const text =
-      `Ingested "${project}" from ${docsDir}:\n` +
+      `Ingested into "${project}":\n` +
       `  ${report.filesIngested} ingested, ${report.filesSkipped} unchanged, ` +
       `${report.chunksWritten} chunks written (of ${report.filesSeen} files).`;
     return { content: [{ type: "text", text }] };

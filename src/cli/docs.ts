@@ -1,44 +1,44 @@
-import { parseArgs } from "node:util";
+import type { CommandModule } from "yargs";
 import { createRag } from "../core/index.js";
 
-/**
- * CLI wrapper listing the source files indexed for a project, with chunk counts.
- *
- * Usage:
- *   npm run docs -- --project <id> [--json]
- */
-async function main(): Promise<void> {
-  const { values } = parseArgs({
-    options: {
-      project: { type: "string", short: "p" },
-      json: { type: "boolean" },
-    },
-  });
-
-  if (!values.project) {
-    console.error("Usage: npm run docs -- --project <id> [--json]");
-    process.exit(1);
-  }
-
-  const { store } = createRag();
-  const files = await store.listFiles(values.project);
-
-  if (values.json) {
-    console.log(JSON.stringify(files, null, 2));
-    return;
-  }
-
-  if (files.length === 0) {
-    console.error(`No docs indexed for project "${values.project}".`);
-    return;
-  }
-
-  for (const f of files) console.log(`${String(f.chunkCount).padStart(4)}  ${f.file}`);
-  const totalChunks = files.reduce((n, f) => n + f.chunkCount, 0);
-  console.error(`\n${files.length} files, ${totalChunks} chunks.`);
+interface DocsArgs {
+  project: string;
+  json: boolean;
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+/** `docs` command. Lists the source files indexed for a project, with chunk counts. */
+export const docsCommand: CommandModule<object, DocsArgs> = {
+  command: "docs",
+  describe: "List the source files indexed for a project, with chunk counts",
+  builder: (yargs) =>
+    yargs
+      .option("project", {
+        alias: "p",
+        type: "string",
+        demandOption: true,
+        describe: "Project id to inspect",
+      })
+      .option("json", {
+        type: "boolean",
+        default: false,
+        describe: "Emit raw results as JSON",
+      }),
+  handler: async (argv) => {
+    const { store } = createRag();
+    const files = await store.listFiles(argv.project);
+
+    if (argv.json) {
+      console.log(JSON.stringify(files, null, 2));
+      return;
+    }
+
+    if (files.length === 0) {
+      console.error(`No docs indexed for project "${argv.project}".`);
+      return;
+    }
+
+    for (const f of files) console.log(`${String(f.chunkCount).padStart(4)}  ${f.file}`);
+    const totalChunks = files.reduce((n, f) => n + f.chunkCount, 0);
+    console.error(`\n${files.length} files, ${totalChunks} chunks.`);
+  },
+};

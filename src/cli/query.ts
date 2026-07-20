@@ -1,52 +1,61 @@
-import { parseArgs } from "node:util";
+import type { CommandModule } from "yargs";
 import { createRag } from "../core/index.js";
 
-/**
- * CLI wrapper around Retriever. Prints ranked chunks; synthesis is left to the
- * caller (a human, or a model reading this output).
- *
- * Usage:
- *   npm run query -- --project <id> --limit 5 "how does auth work?"
- */
-async function main(): Promise<void> {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      project: { type: "string", short: "p" },
-      limit: { type: "string", short: "n" },
-      json: { type: "boolean" },
-    },
-  });
-
-  const query = positionals.join(" ").trim();
-  if (!values.project || !query) {
-    console.error('Usage: npm run query -- --project <id> [--limit N] [--json] "your question"');
-    process.exit(1);
-  }
-
-  const { retriever } = createRag();
-  const results = await retriever.search(values.project, query, {
-    limit: values.limit ? Number(values.limit) : undefined,
-  });
-
-  if (values.json) {
-    console.log(JSON.stringify(results, null, 2));
-    return;
-  }
-
-  if (results.length === 0) {
-    console.error(`No results for "${query}" in project "${values.project}".`);
-    return;
-  }
-
-  for (const [i, r] of results.entries()) {
-    const loc = r.heading ? `${r.file} — ${r.heading}` : r.file;
-    console.log(`\n[${i + 1}] (${r.score.toFixed(3)}) ${loc}`);
-    console.log(r.text);
-  }
+interface QueryArgs {
+  query: string;
+  project: string;
+  limit: number | undefined;
+  json: boolean;
 }
 
-main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+/**
+ * `query` command. Prints ranked chunks; synthesis is left to the caller (a
+ * human, or a model reading this output).
+ */
+export const queryCommand: CommandModule<object, QueryArgs> = {
+  command: "query <query>",
+  describe: "Retrieve the most relevant doc chunks for a query within a project",
+  builder: (yargs) =>
+    yargs
+      .positional("query", {
+        type: "string",
+        demandOption: true,
+        describe: "Natural-language question or topic",
+      })
+      .option("project", {
+        alias: "p",
+        type: "string",
+        demandOption: true,
+        describe: "Project id to search within",
+      })
+      .option("limit", {
+        alias: "n",
+        type: "number",
+        describe: "Max chunks to return (default 5)",
+      })
+      .option("json", {
+        type: "boolean",
+        default: false,
+        describe: "Emit raw results as JSON",
+      }),
+  handler: async (argv) => {
+    const { retriever } = createRag();
+    const results = await retriever.search(argv.project, argv.query, { limit: argv.limit });
+
+    if (argv.json) {
+      console.log(JSON.stringify(results, null, 2));
+      return;
+    }
+
+    if (results.length === 0) {
+      console.error(`No results for "${argv.query}" in project "${argv.project}".`);
+      return;
+    }
+
+    for (const [i, r] of results.entries()) {
+      const loc = r.heading ? `${r.file} — ${r.heading}` : r.file;
+      console.log(`\n[${i + 1}] (${r.score.toFixed(3)}) ${loc}`);
+      console.log(r.text);
+    }
+  },
+};

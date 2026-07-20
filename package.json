@@ -3,11 +3,15 @@
   "version": "0.1.0",
   "description": "Local RAG over per-project markdown docs. Embedded LanceDB store + Ollama embeddings, exposed as CLI scripts and (later) an MCP server.",
   "type": "module",
+  "bin": {
+    "project-docs": "./bin/project-docs.ts"
+  },
   "scripts": {
-    "ingest": "tsx src/cli/ingest.ts",
-    "query": "tsx src/cli/query.ts",
-    "projects": "tsx src/cli/projects.ts",
-    "docs": "tsx src/cli/docs.ts",
+    "cli": "tsx bin/project-docs.ts",
+    "ingest": "tsx bin/project-docs.ts ingest",
+    "query": "tsx bin/project-docs.ts query",
+    "projects": "tsx bin/project-docs.ts projects",
+    "docs": "tsx bin/project-docs.ts docs",
     "mcp": "tsx src/mcp/server.ts",
     "smoke": "tsx scripts/smoke-test.ts",
     "typecheck": "tsc --noEmit"
@@ -19,11 +23,13 @@
     "remark-mdx": "^3.1.1",
     "remark-parse": "^11.0.0",
     "unified": "^11.0.5",
+    "yargs": "^18.0.0",
     "zod": "^4.1.11"
   },
   "devDependencies": {
     "@types/mdast": "^4.0.4",
     "@types/node": "^24.13.3",
+    "@types/yargs": "^17.0.33",
     "tsx": "^4.20.6",
     "typescript": "^7.0.2"
   }

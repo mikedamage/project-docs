@@ -19,6 +19,7 @@ scripts and as an MCP server (for Claude Code / Claude Desktop on this machine).
   automatically — do not add them at call sites.
 - **Markdown parsing:** `unified` + `remark-parse` (+ `remark-mdx` for `.mdx`).
 - **MCP:** `@modelcontextprotocol/sdk` (stable v1 API), stdio transport.
+- **CLI:** `yargs` command modules behind a single `project-docs` entrypoint.
 - **Validation:** `zod` (v4).
 
 ## Core design contract
@@ -44,24 +45,32 @@ src/core/
   ingestor.ts   walk docs -> chunk -> embed -> upsert (idempotent via file hash)
   retriever.ts  embed query -> cosine search within a project
   index.ts      createRag() wiring point + public re-exports
-src/cli/
-  ingest.ts     npm run ingest
-  query.ts      npm run query
-  docs.ts       npm run docs
-  projects.ts   npm run projects
+src/cli/           each file exports a yargs CommandModule (no self-execution)
+  ingest.ts     ingestCommand
+  query.ts      queryCommand
+  docs.ts       docsCommand
+  projects.ts   projectsCommand
+bin/
+  project-docs.ts  CLI entrypoint — registers the command modules (npm run cli)
 src/mcp/
   server.ts     npm run mcp — stdio MCP server exposing the core tools
 scripts/
-  smoke-test.ts npm run smoke — spawns the server, lists tools, calls list_projects
+  smoke-test.ts npm run smoke — full MCP lifecycle test (needs Ollama running)
 data/           LanceDB storage (gitignored)
 ```
+
+The CLI is one `project-docs` command with subcommands. Each `src/cli/*.ts`
+exports a `CommandModule` and does NOT self-execute; `bin/project-docs.ts` wires
+them into yargs. To add a command: export a new `CommandModule` and register it
+in the bin script.
 
 ## Commands
 
 ```bash
 npm install
 npm run typecheck                                   # tsc --noEmit (must stay clean)
-npm run ingest -- --project <id> --dir <docs/dir>   # index a docs folder
+npm run cli    -- --help                            # list all subcommands
+npm run ingest -- --project <id> <path>...          # index files and/or dirs
 npm run query  -- --project <id> [--limit N] [--json] "question"
 npm run docs   -- --project <id> [--json]           # list indexed files + chunk counts
 npm run projects                                    # list projects
@@ -69,6 +78,9 @@ npm run projects -- --drop <id>                      # delete a project
 npm run mcp                                          # run the MCP server (stdio)
 npm run smoke                                        # end-to-end MCP smoke test
 ```
+
+The `npm run <cmd>` aliases proxy to `tsx bin/project-docs.ts <cmd>`. You can
+also run `npx tsx bin/project-docs.ts <cmd>` directly.
 
 MCP tools (mirror the CLI): `list_projects`, `list_docs`, `query_docs`,
 `ingest_docs`, `drop_project`.
@@ -83,6 +95,10 @@ MCP tools (mirror the CLI): `list_projects`, `list_docs`, `query_docs`,
   keep project ids slug-like. `listProjects()` returns the slug, not the raw id.
 - **Idempotent ingest:** each file's sha256 is stored on its chunks; re-ingesting
   skips files whose content is unchanged. Changed files are delete-then-insert.
+- **Chunks are keyed by resolved absolute path.** `ingest` takes any mix of files
+  and directories (variadic positional); directories are walked recursively for
+  markdown, named files are ingested as-is (any extension). Overlapping inputs are
+  de-duplicated by absolute path.
 - **MDX only for `.mdx`:** the chunker applies `remark-mdx` only to `.mdx` files —
   it treats `{...}`/`<tag>` as JSX, which would throw on plain `.md` prose.
 - **Chunker uses an AST, not regexes:** `#` inside a fenced code block is a real
@@ -115,7 +131,6 @@ claude mcp add doc-reference-rag -- npx -y tsx /Users/mikegreen/dev/project-doc-
 ## Status / not yet built
 
 - No automated test suite beyond the smoke test.
-- `zod` is a dependency but currently only used by the MCP tool schemas; the CLIs
-  use `node:util` `parseArgs`.
+- `zod` is currently used only by the MCP tool schemas; the CLI uses yargs.
 - Retrieval is single-project vector search only (no reranking, no hybrid/keyword
   search, no cross-project query).
