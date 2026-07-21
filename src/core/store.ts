@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import * as lancedb from "@lancedb/lancedb";
 import type { RagConfig } from "./config.js";
 import type { EmbeddedChunk, IndexedFile, SearchResult } from "./types.js";
@@ -51,7 +52,12 @@ export class LanceStore implements VectorStore {
   }
 
   private async connect(): Promise<lancedb.Connection> {
-    if (!this.db) this.db = await lancedb.connect(this.dataDir);
+    if (!this.db) {
+      // Ensure the data dir exists (default is ~/.local/share/project-docs,
+      // which won't exist on a fresh machine). mkdir -p is a no-op if present.
+      await mkdir(this.dataDir, { recursive: true });
+      this.db = await lancedb.connect(this.dataDir);
+    }
     return this.db;
   }
 

@@ -4,7 +4,8 @@ Local RAG over the markdown docs of the projects you work on. Docs are segregate
 by project so queries only return context relevant to what you're building.
 
 - **Vector store:** [LanceDB](https://lancedb.github.io/lancedb/) — embedded, no
-  server process, persists to `./data`.
+  server process, persists to an OS-native per-user data dir
+  (e.g. `~/Library/Application Support/project-docs` on macOS).
 - **Embeddings:** local [Ollama](https://ollama.com/) running `nomic-embed-text`
   (768-dim; task prefixes applied automatically).
 - **Interfaces:** CLI scripts now; an MCP server (`src/mcp/server.ts`) later. Both
@@ -70,7 +71,7 @@ per-file sha256).
 
 | Var                    | Default                  |
 | ---------------------- | ------------------------ |
-| `RAG_DATA_DIR`         | `./data`                 |
+| `RAG_DATA_DIR`         | OS-native per-user data dir (macOS `~/Library/Application Support/project-docs`, Win `%LOCALAPPDATA%\project-docs`, else `~/.local/share/project-docs`) |
 | `OLLAMA_URL`           | `http://localhost:11434` |
 | `RAG_EMBEDDING_MODEL`  | `nomic-embed-text`       |
 | `RAG_EMBEDDING_DIMS`   | `768`                    |

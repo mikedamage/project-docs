@@ -13,7 +13,8 @@ scripts and as an MCP server (for Claude Code / Claude Desktop on this machine).
 
 - **Language:** TypeScript, ESM (`"type": "module"`), run via `tsx` (no build step).
 - **Vector store:** [LanceDB](https://lancedb.github.io/lancedb/) (`@lancedb/lancedb`) —
-  embedded, no server process, persists to `./data`.
+  embedded, no server process, persists to an OS-native per-user data dir
+  (e.g. `~/Library/Application Support/project-docs` on macOS).
 - **Embeddings:** local [Ollama](https://ollama.com/) running `nomic-embed-text`
   (768-dim). Task prefixes (`search_document:` / `search_query:`) are applied
   automatically — do not add them at call sites.
@@ -57,7 +58,7 @@ src/mcp/
   server.ts     stdio MCP server; exports startMcpServer(), self-execs when run directly
 scripts/
   smoke-test.ts npm run smoke — full MCP lifecycle test (needs Ollama running)
-data/           LanceDB storage (gitignored)
+(data dir)      LanceDB storage — OS-native per-user data dir, not in-repo
 ```
 
 The CLI is one `project-docs` command with subcommands. Each `src/cli/*.ts`
@@ -107,16 +108,23 @@ MCP tools (mirror the CLI): `list_projects`, `list_docs`, `query_docs`,
   original source via node offsets, so formatting is preserved.
 - **stdio hygiene (MCP):** only protocol frames may go to **stdout**. All logging
   goes to **stderr**. Never `console.log` from the server or the core.
-- **Data location is cwd-independent:** `dataDir` is anchored to the repo via
-  `import.meta.dirname`, so all tools read/write the same `./data` regardless of
-  where they're launched. Only `ingest_docs`'s relative `dir` resolves against cwd
-  (pass an absolute path from the MCP client).
+- **Data location is user-scoped, not in the module:** `dataDir` defaults to the
+  OS-native per-user data dir — `~/Library/Application Support/project-docs` on
+  macOS, `%LOCALAPPDATA%\project-docs` on Windows, `~/.local/share/project-docs`
+  (or `$XDG_DATA_HOME/project-docs`) elsewhere — NOT a dir inside the repo. An
+  absolute `XDG_DATA_HOME` overrides the platform default on any OS. This is
+  deliberate: as an npm-installed MCP server, a data dir under the module would
+  be wiped on every reinstall/upgrade. The path is absolute and cwd-independent,
+  so all tools read/write the same store regardless of where they're launched;
+  `connect()` creates it (`mkdir -p`) on first use. Override with `RAG_DATA_DIR`.
+  Only `ingest`'s relative paths resolve against cwd (pass absolute paths from
+  the MCP client).
 
 ## Config (env vars)
 
 | Var                   | Default                  |
 | --------------------- | ------------------------ |
-| `RAG_DATA_DIR`        | `./data`                 |
+| `RAG_DATA_DIR`        | OS-native per-user data dir (macOS `~/Library/Application Support/project-docs`, Win `%LOCALAPPDATA%\project-docs`, else `~/.local/share/project-docs`) |
 | `OLLAMA_URL`          | `http://localhost:11434` |
 | `RAG_EMBEDDING_MODEL` | `nomic-embed-text`       |
 | `RAG_EMBEDDING_DIMS`  | `768`                    |
