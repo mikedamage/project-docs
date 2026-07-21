@@ -3,6 +3,7 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { docsCommand } from "../src/cli/docs.js";
 import { ingestCommand } from "../src/cli/ingest.js";
+import { mcpCommand } from "../src/cli/mcp.js";
 import { projectsCommand } from "../src/cli/projects.js";
 import { queryCommand } from "../src/cli/query.js";
 
@@ -18,6 +19,7 @@ async function main(): Promise<void> {
     .command(queryCommand)
     .command(docsCommand)
     .command(projectsCommand)
+    .command(mcpCommand)
     .demandCommand(1, "Specify a command, e.g. `project-docs query ...`")
     .strict()
     .help()

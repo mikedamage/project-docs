@@ -1,3 +1,4 @@
+import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -20,6 +21,17 @@ const server = new McpServer({
   name: "doc-reference-rag",
   version: "0.1.0",
 });
+
+/**
+ * Connect the server to stdio and block until the transport closes. Exported so
+ * both the `project-docs mcp` CLI command and direct execution of this file can
+ * start the identical server.
+ */
+export async function startMcpServer(): Promise<void> {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error(`doc-reference-rag MCP server ready (data: ${rag.config.dataDir}).`);
+}
 
 server.registerTool(
   "list_projects",
@@ -139,13 +151,12 @@ function formatResults(results: SearchResult[]): string {
     .join("\n\n");
 }
 
-async function main(): Promise<void> {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error(`doc-reference-rag MCP server ready (data: ${rag.config.dataDir}).`);
+// Self-execute when this file is run directly (e.g. `npm run mcp` or a client
+// wired to `... server.ts`), but not when imported by the CLI command module.
+const invokedPath = process.argv[1];
+if (invokedPath && import.meta.url === pathToFileURL(invokedPath).href) {
+  startMcpServer().catch((err) => {
+    console.error(err instanceof Error ? err.stack ?? err.message : err);
+    process.exit(1);
+  });
 }
-
-main().catch((err) => {
-  console.error(err instanceof Error ? err.stack ?? err.message : err);
-  process.exit(1);
-});

@@ -50,10 +50,11 @@ src/cli/           each file exports a yargs CommandModule (no self-execution)
   query.ts      queryCommand
   docs.ts       docsCommand
   projects.ts   projectsCommand
+  mcp.ts        mcpCommand — runs the MCP server via startMcpServer()
 bin/
   project-docs.ts  CLI entrypoint — registers the command modules (npm run cli)
 src/mcp/
-  server.ts     npm run mcp — stdio MCP server exposing the core tools
+  server.ts     stdio MCP server; exports startMcpServer(), self-execs when run directly
 scripts/
   smoke-test.ts npm run smoke — full MCP lifecycle test (needs Ollama running)
 data/           LanceDB storage (gitignored)
@@ -75,7 +76,7 @@ npm run query  -- --project <id> [--limit N] [--json] "question"
 npm run docs   -- --project <id> [--json]           # list indexed files + chunk counts
 npm run projects                                    # list projects
 npm run projects -- --drop <id>                      # delete a project
-npm run mcp                                          # run the MCP server (stdio)
+npm run mcp                                          # run the MCP server (stdio); == project-docs mcp
 npm run smoke                                        # end-to-end MCP smoke test
 ```
 
@@ -126,6 +127,12 @@ MCP tools (mirror the CLI): `list_projects`, `list_docs`, `query_docs`,
 
 ```bash
 claude mcp add doc-reference-rag -- npx -y tsx /Users/mikegreen/dev/project-doc-reference-rag/src/mcp/server.ts
+```
+
+Equivalently, point the client at the CLI subcommand (same server):
+
+```bash
+claude mcp add doc-reference-rag -- npx -y tsx /Users/mikegreen/dev/project-doc-reference-rag/bin/project-docs.ts mcp
 ```
 
 ## Status / not yet built

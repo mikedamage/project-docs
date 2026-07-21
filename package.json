@@ -12,7 +12,7 @@
     "query": "tsx bin/project-docs.ts query",
     "projects": "tsx bin/project-docs.ts projects",
     "docs": "tsx bin/project-docs.ts docs",
-    "mcp": "tsx src/mcp/server.ts",
+    "mcp": "tsx bin/project-docs.ts mcp",
     "smoke": "tsx scripts/smoke-test.ts",
     "typecheck": "tsc --noEmit"
   },
