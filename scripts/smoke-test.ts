@@ -17,7 +17,14 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
  *
  * Run: npm run smoke
  */
-const EXPECTED_TOOLS = ["list_projects", "list_docs", "query_docs", "ingest_docs", "drop_project"];
+const EXPECTED_TOOLS = [
+  "list_projects",
+  "list_docs",
+  "query_docs",
+  "ingest_docs",
+  "prune_docs",
+  "drop_project",
+];
 
 const SAMPLE_DOC = `# Widget Service
 

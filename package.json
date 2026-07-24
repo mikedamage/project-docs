@@ -9,6 +9,7 @@
   "scripts": {
     "cli": "tsx bin/project-docs.ts",
     "ingest": "tsx bin/project-docs.ts ingest",
+    "prune": "tsx bin/project-docs.ts prune",
     "query": "tsx bin/project-docs.ts query",
     "projects": "tsx bin/project-docs.ts projects",
     "docs": "tsx bin/project-docs.ts docs",

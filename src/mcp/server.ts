@@ -127,6 +127,32 @@ server.registerTool(
 );
 
 server.registerTool(
+  "prune_docs",
+  {
+    title: "Prune deleted docs",
+    description:
+      "Remove indexed docs from a project whose source file no longer exists on " +
+      "disk. Ingest is additive, so files deleted or renamed at the source leave " +
+      "orphaned chunks behind; this reconciles the index with the filesystem. " +
+      "Only genuinely-missing files are removed.",
+    inputSchema: {
+      project: z.string().describe("Project id to prune."),
+    },
+    annotations: { idempotentHint: true, destructiveHint: true },
+  },
+  async ({ project }) => {
+    const report = await rag.ingestor.prune(project);
+    const removed = report.removedFiles.length
+      ? `\n${report.removedFiles.map((f) => `  - ${f}`).join("\n")}`
+      : "";
+    const text =
+      `Pruned "${project}": removed ${report.filesRemoved} of ` +
+      `${report.filesChecked} indexed files.${removed}`;
+    return { content: [{ type: "text", text }] };
+  },
+);
+
+server.registerTool(
   "drop_project",
   {
     title: "Drop a project",

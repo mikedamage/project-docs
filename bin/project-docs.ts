@@ -5,6 +5,7 @@ import { docsCommand } from "../src/cli/docs.js";
 import { ingestCommand } from "../src/cli/ingest.js";
 import { mcpCommand } from "../src/cli/mcp.js";
 import { projectsCommand } from "../src/cli/projects.js";
+import { pruneCommand } from "../src/cli/prune.js";
 import { queryCommand } from "../src/cli/query.js";
 
 /**
@@ -16,6 +17,7 @@ async function main(): Promise<void> {
   await yargs(hideBin(process.argv))
     .scriptName("project-docs")
     .command(ingestCommand)
+    .command(pruneCommand)
     .command(queryCommand)
     .command(docsCommand)
     .command(projectsCommand)

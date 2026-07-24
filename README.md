@@ -48,6 +48,11 @@ built with yargs). Run it directly, or via the `npm run` aliases.
 npx tsx bin/project-docs.ts ingest --project my-app ../my-app/docs
 npm run ingest -- --project my-app ../my-app/docs ../shared/CONTRIBUTING.md
 
+# Prune indexed docs whose source file no longer exists on disk.
+# Ingest is additive, so deleting/renaming a source file leaves orphaned chunks
+# until you prune. (Reconciles the index with the filesystem by absolute path.)
+npm run prune -- --project my-app
+
 # Query within a project
 npm run query -- --project my-app "how is auth configured?"
 npm run query -- --project my-app --json "how is auth configured?"

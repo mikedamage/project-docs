@@ -11,6 +11,8 @@ import type { EmbeddedChunk, IndexedFile, SearchResult } from "./types.js";
 export interface VectorStore {
   /** Replace all chunks for a file within a project (delete-then-insert). */
   replaceFile(project: string, file: string, chunks: EmbeddedChunk[]): Promise<void>;
+  /** Delete all chunks for a file within a project. No-op if absent. */
+  deleteFile(project: string, file: string): Promise<void>;
   /** Stored file hash for a source file, or null if the file isn't indexed. */
   getFileHash(project: string, file: string): Promise<string | null>;
   /** Nearest chunks to `vector` within a project. */
@@ -101,6 +103,12 @@ export class LanceStore implements VectorStore {
     } else {
       await db.createTable(name, rows);
     }
+  }
+
+  async deleteFile(project: string, file: string): Promise<void> {
+    const table = await this.openTable(project);
+    if (!table) return;
+    await table.delete(`file = ${sqlString(file)}`);
   }
 
   async getFileHash(project: string, file: string): Promise<string | null> {

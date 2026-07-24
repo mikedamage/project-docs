@@ -19,6 +19,13 @@ export interface IngestReport {
 
 export type IngestAction = "ingested" | "skipped";
 
+export interface PruneReport {
+  project: string;
+  filesChecked: number;
+  filesRemoved: number;
+  removedFiles: string[];
+}
+
 /**
  * Ingests markdown/MDX into a project from a mix of files and directories.
  * Idempotent: files whose content hash matches the stored hash are skipped, so
@@ -62,6 +69,42 @@ export class Ingestor {
       } else {
         report.filesSkipped++;
       }
+    }
+
+    return report;
+  }
+
+  /**
+   * Remove indexed docs whose source file no longer exists on disk. Chunks are
+   * keyed by absolute path, so each indexed file can be stat'd directly. Only
+   * genuinely-missing files (ENOENT) are pruned; any other stat error (e.g. a
+   * permissions problem) aborts rather than risk deleting still-present docs.
+   */
+  async prune(
+    project: string,
+    onRemove?: (file: string) => void,
+  ): Promise<PruneReport> {
+    const indexed = await this.store.listFiles(project);
+    const report: PruneReport = {
+      project,
+      filesChecked: indexed.length,
+      filesRemoved: 0,
+      removedFiles: [],
+    };
+
+    for (const { file } of indexed) {
+      try {
+        await stat(file);
+        continue; // still on disk — keep it
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw new Error(`Cannot stat "${file}" while pruning: ${(err as Error).message}`);
+        }
+      }
+      await this.store.deleteFile(project, file);
+      report.filesRemoved++;
+      report.removedFiles.push(file);
+      onRemove?.(file);
     }
 
     return report;

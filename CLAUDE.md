@@ -73,6 +73,7 @@ npm install
 npm run typecheck                                   # tsc --noEmit (must stay clean)
 npm run cli    -- --help                            # list all subcommands
 npm run ingest -- --project <id> <path>...          # index files and/or dirs
+npm run prune  -- --project <id>                    # drop indexed docs whose source file is gone
 npm run query  -- --project <id> [--limit N] [--json] "question"
 npm run docs   -- --project <id> [--json]           # list indexed files + chunk counts
 npm run projects                                    # list projects
@@ -85,7 +86,7 @@ The `npm run <cmd>` aliases proxy to `tsx bin/project-docs.ts <cmd>`. You can
 also run `npx tsx bin/project-docs.ts <cmd>` directly.
 
 MCP tools (mirror the CLI): `list_projects`, `list_docs`, `query_docs`,
-`ingest_docs`, `drop_project`.
+`ingest_docs`, `prune_docs`, `drop_project`.
 
 ## Conventions & things to know
 
@@ -97,6 +98,12 @@ MCP tools (mirror the CLI): `list_projects`, `list_docs`, `query_docs`,
   keep project ids slug-like. `listProjects()` returns the slug, not the raw id.
 - **Idempotent ingest:** each file's sha256 is stored on its chunks; re-ingesting
   skips files whose content is unchanged. Changed files are delete-then-insert.
+- **Ingest is additive; deletions are not detected.** Ingest only ever visits the
+  paths it's handed, so a source file deleted or renamed on disk leaves orphaned
+  chunks behind. Reconcile with `prune` (CLI) / `prune_docs` (MCP), which stats
+  every indexed file (keyed by absolute path) and drops those that no longer
+  exist. Only ENOENT counts as missing — other stat errors abort rather than risk
+  deleting still-present docs.
 - **Chunks are keyed by resolved absolute path.** `ingest` takes any mix of files
   and directories (variadic positional); directories are walked recursively for
   markdown, named files are ingested as-is (any extension). Overlapping inputs are
