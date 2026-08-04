@@ -1,6 +1,6 @@
 {
   "name": "project-doc-reference-rag",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local RAG over per-project markdown docs. Embedded LanceDB store + Ollama embeddings, exposed as CLI scripts and (later) an MCP server.",
   "type": "module",
   "bin": {
@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@lancedb/lancedb": "^0.31.0",
+    "@lancedb/lancedb": "^0.30.0",
     "@modelcontextprotocol/sdk": "^1.20.0",
     "mdast-util-to-string": "^4.0.0",
     "remark-mdx": "^3.1.1",
@@ -33,5 +33,9 @@
     "@types/yargs": "^17.0.33",
     "tsx": "^4.20.6",
     "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "fsevents@2.3.3": true,
+    "esbuild@0.28.1": true
   }
 }
