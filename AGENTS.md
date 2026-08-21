@@ -1,13 +1,13 @@
-# CLAUDE.md
+# AGENTS.md
 
-Guidance for Claude Code when working in this repository.
+Guidance for Codex when working in this repository.
 
 ## What this is
 
 A local RAG system over the markdown docs of the projects the user works on.
 Docs are **segregated by project** so queries only return context relevant to the
 project being worked on. It exposes the same core capabilities two ways: as CLI
-scripts and as an MCP server (for Claude Code / Claude Desktop on this machine).
+scripts and as an MCP server (for Codex / Codex Desktop on this machine).
 
 ## Stack
 
@@ -197,7 +197,7 @@ npm link          # from the repo root; one-time
 Then the client config needs no paths at all:
 
 ```bash
-claude mcp add doc-reference-rag -- project-docs mcp
+Codex mcp add doc-reference-rag -- project-docs mcp
 ```
 
 `npm link` symlinks the global bin to `dist/bin/project-docs.js` **inside this
@@ -218,7 +218,7 @@ picks up edits with no rebuild, at the cost of `tsx` startup on every client
 launch:
 
 ```bash
-claude mcp add doc-reference-rag -- npx -y tsx /Users/mike/dev/project-doc-reference-rag/src/mcp/server.ts
+Codex mcp add doc-reference-rag -- npx -y tsx /Users/mike/dev/project-doc-reference-rag/src/mcp/server.ts
 ```
 
 ## Status / not yet built

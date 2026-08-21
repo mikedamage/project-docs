@@ -12,7 +12,10 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
-    "noEmit": true
+    "rootDir": ".",
+    "outDir": "dist",
+    "sourceMap": true
   },
+  "exclude": ["node_modules", "dist"],
   "include": ["src/**/*.ts", "scripts/**/*.ts", "bin/**/*.ts"]
 }
