@@ -37,7 +37,11 @@ export const docsCommand: CommandModule<object, DocsArgs> = {
       return;
     }
 
-    for (const f of files) console.log(`${String(f.chunkCount).padStart(4)}  ${f.file}`);
+    // `(forced)` marks a file kept despite a .docignore match — it is sticky and
+    // prune leaves it alone, so it should be visible here.
+    for (const f of files) {
+      console.log(`${String(f.chunkCount).padStart(4)}  ${f.file}${f.forced ? "  (forced)" : ""}`);
+    }
     const totalChunks = files.reduce((n, f) => n + f.chunkCount, 0);
     console.error(`\n${files.length} files, ${totalChunks} chunks.`);
   },

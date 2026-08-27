@@ -24,6 +24,9 @@ scripts and as an MCP server (for Codex / Codex Desktop on this machine).
 - **MCP:** `@modelcontextprotocol/sdk` (stable v1 API), stdio transport.
 - **CLI:** `yargs` command modules behind a single `project-docs` entrypoint.
 - **Validation:** `zod` (v4).
+- **Ignore files:** `ignore` — gitignore semantics for `.docignore`. Zero
+  dependencies; chosen over minimatch/picomatch/globby because it is the only one
+  of them that implements *gitignore* rules rather than bash globbing.
 
 ## Core design contract
 
@@ -43,9 +46,10 @@ src/core/
   config.ts     env-overridable config (data dir, model, chunk sizes)
   types.ts      Chunk, EmbeddedChunk, IndexedFile, SearchResult
   embedder.ts   Embedder interface + OllamaEmbedder (nomic prefixes baked in)
-  store.ts      VectorStore interface + LanceStore (one table per project)
+  store.ts      VectorStore interface + LanceStore (one table per project,
+                self-migrating schema)
   chunker.ts    header-aware markdown/MDX chunking (mdast-based)
-  docignore.ts  .docignore parsing/matching (one compiled regex per ignore file)
+  docignore.ts  .docignore discovery + path scoping (semantics via `ignore`)
                 + DocignoreChainLoader (per-directory chain lookup, for prune)
   ingestor.ts   walk docs -> chunk -> embed -> upsert (idempotent via file hash)
   retriever.ts  embed query -> cosine search within a project
@@ -81,7 +85,7 @@ npm run typecheck                                   # tsc --noEmit (must stay cl
 npm run build                                       # tsc -> dist/ (+ chmod +x the bin)
 npm link                                            # one-time: put project-docs on PATH
 npm run cli    -- --help                            # list all subcommands
-npm run ingest -- --project <id> <path>...          # index files and/or dirs
+npm run ingest -- --project <id> [--force] <path>...  # index files and/or dirs
 npm run prune  -- --project <id>                    # drop indexed docs that are gone or now .docignore'd
 npm run query  -- --project <id> [--limit N] [--json] "question"
 npm run docs   -- --project <id> [--json]           # list indexed files + chunk counts
@@ -154,24 +158,33 @@ Consequences worth remembering:
   with `prune` (CLI) / `prune_docs` (MCP), which checks every indexed file (keyed
   by absolute path) and drops it as **missing** (gone from disk) or **ignored**
   (still there, now excluded); the report and both wrappers count the two
-  separately. Only ENOENT counts as missing — other stat errors abort rather than
-  risk deleting still-present docs.
+  separately. Force-ingested files are exempt from the second rule. Only ENOENT
+  counts as missing — other stat errors abort rather than risk deleting
+  still-present docs.
 - **Chunks are keyed by resolved absolute path.** `ingest` takes any mix of files
   and directories (variadic positional); directories are walked recursively for
-  markdown, named files are ingested as-is (any extension). Overlapping inputs are
-  de-duplicated by absolute path.
+  markdown, named files are ingested as-is (any extension, subject to `.docignore`
+  — see below). Overlapping inputs are de-duplicated by absolute path.
 - **`.docignore` excludes files from directory walks.** Gitignore syntax and
-  semantics: one glob per line, `#` comments (first non-whitespace char), `!` to
-  re-include, trailing `/` for directory-only, a leading or interior `/` anchors
-  to the ignore file's own directory (otherwise the pattern matches at any depth),
-  `**` spans segments, last matching pattern wins. Nested like gitignore — a
-  `.docignore` applies to its own directory's subtree and overrides its parents,
-  and the chain is searched all the way up to the filesystem root — a `.docignore`
-  above the directory you hand to `ingest` still applies. One deliberate departure
-  from git: **explicitly-named file arguments bypass exclusion entirely** (naming
-  a file is explicit intent, same reason such files skip the markdown extension
-  filter). Excluded paths are counted in `IngestReport.pathsIgnored` and reported
-  by both wrappers; an excluded directory counts once.
+  semantics: one glob per line, `!` to re-include, trailing `/` for
+  directory-only, a leading or interior `/` anchors to the ignore file's own
+  directory (otherwise the pattern matches at any depth), `**` spans segments,
+  last matching pattern wins. Nested like gitignore — a `.docignore` applies to
+  its own directory's subtree and overrides its parents, and the chain is searched
+  all the way up to the filesystem root, so a `.docignore` above the directory you
+  hand to `ingest` still applies. Excluded paths are counted in
+  `IngestReport.pathsIgnored` and reported by both wrappers; an excluded directory
+  counts once.
+- **Whitespace and `#` follow git exactly, which is fussier than it looks.**
+  Leading whitespace is *part of the pattern*, so a comment's `#` must be in
+  column 0 — `  # foo` is a pattern matching a file named `  # foo`, not a
+  comment. There are no inline comments either: a `#` anywhere but column 0 is a
+  literal character, so `x.md # note` matches a file with that exact name.
+  Trailing whitespace *is* stripped, unless backslash-escaped (`foo\ ` matches
+  `foo ` with the space). `ignore` gets all of this right; the only place we
+  restate it is `DocignoreMatcher.compile`, which scans for "does this file hold
+  any pattern at all" to decide whether to skip the file entirely. Keep that scan
+  in step with the rule above — in particular, do not `trimStart()` there.
 - **Ingest and prune must agree about exclusion, or they undo each other.** Both
   resolve the same chain — the walk builds its stack as it descends and seeds it
   from the ancestors above the root, while `prune` reconstructs it per path via
@@ -181,20 +194,47 @@ Consequences worth remembering:
   (`drafts/`) retire the files beneath it — the walk gets that for free by never
   descending. Ancestor search exists on the ingest side purely to keep the two in
   step: without it, a `.docignore` above the ingest root would have prune deleting
-  on every run what the next ingest re-adds. The one asymmetry left is deliberate:
-  prune is the authority on exclusion, so a file ingested as an explicit argument
-  despite matching a pattern is removed on the next prune.
-- **Ignore matching is one regex exec per path, not one per pattern.** Every
-  pattern in a `.docignore` compiles into a single anchored RegExp whose
-  alternatives are emitted in *reverse* source order. Anchoring makes "an
-  alternative matched" equivalent to "it matched the whole path", and the engine
-  commits to the first alternative that can — so reversing yields gitignore's
-  last-match-wins in one pass, and the set capture group identifies the winner.
-  Directories are tested with a trailing `/`, which is what lets one regex serve
-  both files and directories. Ingest cost is therefore O(paths x ignore-file
-  depth), and an ignored directory is pruned without being read, so excluding a
-  subtree costs one test rather than one per file inside it. Keep it that way: do
-  not add a per-pattern loop.
+  on every run what the next ingest re-adds. The `forced` flag is the other half
+  of that contract — it is the only thing that lets an excluded file stay indexed,
+  and both sides honour it.
+- **Excluded files must be forced in explicitly, and it sticks.** Naming an
+  excluded file as an argument is *not* enough — ingest refuses it and reports
+  it (`IngestReport.refusedPaths`, warned by both wrappers), the same way git
+  refuses to `git add` an ignored path and points at `-f`. `--force` (CLI) /
+  `force: true` (MCP) admits it and persists `forced: true` on its chunks, which
+  is what makes the decision durable: a forced file keeps re-ingesting without
+  the flag, and `prune` will not retire it as excluded (it is still pruned if the
+  file actually disappears). Force applies **only to explicitly-named files** —
+  a directory walk always honours exclusions, so `--force` can never rake a whole
+  ignored subtree back in. To un-force, drop the pattern and re-ingest the
+  directory: anything the walk reaches is by definition not excluded, so the flag
+  clears. `docs` / `list_docs` mark forced files so a sticky flag stays visible.
+- **The store schema migrates itself.** LanceDB infers a table's schema from the
+  first insert and then rejects any row carrying an unknown field (`Found field
+  not in schema`), so adding the `forced` column would break every write to a
+  project indexed before it existed. `LanceStore.migrate()` backfills it via
+  `addColumns` on first touch of each table, once per process. Adding another
+  persisted field means extending that migration — a new column is not a
+  backwards-compatible change on its own.
+- **Pattern semantics come from `ignore`; do not hand-roll them again.** Glob
+  translation, `!` ordering, character classes, escaping and `**` spanning are all
+  delegated to the `ignore` package — the same gitignore implementation ESLint and
+  globby use. An earlier version translated globs to a single combined regex by
+  hand. It was measurably correct (3,136 differential cases against `ignore`, zero
+  divergence) and still not worth keeping: `ignore` is ~6x faster in situ, and the
+  ~190 lines it replaced were exactly the code that produces ReDoS CVEs in glob
+  libraries. Note that *no* implementation escapes that risk — hand-rolled,
+  `ignore`, picomatch and minimatch are all exponential on patterns like
+  `*a*a*a*a*.md`; the difference is whose problem it is to fix.
+  What is genuinely ours, and is the part worth protecting: locating ignore files,
+  resolving each path relative to the file that owns it, and chaining nested
+  files. An ignored directory is pruned from the walk without being read, so
+  excluding a subtree costs one test rather than one per file inside it.
+- **Matching is case-insensitive on macOS only.** `IGNORE_CASE` is
+  `os.type() === "Darwin"`, mirroring git, which sets `core.ignorecase` on
+  case-insensitive filesystems. So `changelog.md` in a `.docignore` excludes
+  `CHANGELOG.md` on a Mac and not on Linux. Windows is not a target and falls
+  through to the case-sensitive branch.
 - **MDX only for `.mdx`:** the chunker applies `remark-mdx` only to `.mdx` files —
   it treats `{...}`/`<tag>` as JSX, which would throw on plain `.md` prose.
 - **Chunker uses an AST, not regexes:** `#` inside a fenced code block is a real

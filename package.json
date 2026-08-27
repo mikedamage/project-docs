@@ -26,6 +26,7 @@
   "dependencies": {
     "@lancedb/lancedb": "^0.30.0",
     "@modelcontextprotocol/sdk": "^1.20.0",
+    "ignore": "^7.0.6",
     "mdast-util-to-string": "^4.0.0",
     "remark-mdx": "^3.1.1",
     "remark-parse": "^11.0.0",

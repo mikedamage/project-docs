@@ -27,9 +27,30 @@ export interface IngestReport {
    * counted individually.
    */
   pathsIgnored: number;
+  /** Files ingested (or kept) despite exclusion, via `force` or a stored flag. */
+  filesForced: number;
+  /**
+   * Excluded files named as arguments and left alone because `force` was not
+   * set. These are the ones worth warning about: the caller asked for them by
+   * name and did not get them.
+   */
+  refusedPaths: string[];
 }
 
 export type IngestAction = "ingested" | "skipped";
+
+export interface IngestOptions {
+  /**
+   * Ingest explicitly-named files even when a `.docignore` excludes them, and
+   * mark them so they stay ingested and survive `prune`. Applies only to files
+   * named as arguments — directory walks always honour exclusions, so this can
+   * never force a whole tree back in by accident.
+   */
+  force?: boolean;
+  onProgress?: (file: string, action: IngestAction) => void;
+  /** An excluded file named as an argument without `force` — reported, not ingested. */
+  onRefused?: (file: string) => void;
+}
 
 /** Why a pruned file was dropped from the index. */
 export type PruneReason = "missing" | "ignored";
@@ -74,9 +95,9 @@ export class Ingestor {
   async ingestPaths(
     project: string,
     paths: string[],
-    onProgress?: (file: string, action: IngestAction) => void,
+    options: IngestOptions = {},
   ): Promise<IngestReport> {
-    const { files, ignored } = await this.expandPaths(paths);
+    const { files, ignored, refused } = await this.expandPaths(project, paths, options);
     const report: IngestReport = {
       project,
       filesSeen: files.length,
@@ -84,10 +105,13 @@ export class Ingestor {
       filesSkipped: 0,
       chunksWritten: 0,
       pathsIgnored: ignored,
+      filesForced: 0,
+      refusedPaths: refused,
     };
 
-    for (const file of files) {
-      const chunksWritten = await this.ingestFile(project, file, onProgress);
+    for (const [file, forced] of files) {
+      if (forced) report.filesForced++;
+      const chunksWritten = await this.ingestFile(project, file, forced, options.onProgress);
       if (chunksWritten > 0) {
         report.filesIngested++;
         report.chunksWritten += chunksWritten;
@@ -111,9 +135,9 @@ export class Ingestor {
    *   never revisits what it already stored, so this is the only thing that
    *   retires those chunks.
    *
-   * Note that this makes prune the authority on exclusion: a file that ingest
-   * accepted *because it was named explicitly* (explicit arguments bypass
-   * `.docignore`) is still removed here if it matches a pattern.
+   * Files ingested with `force` are exempt from the second rule: the flag is
+   * persisted precisely so that "I know it is excluded, keep it anyway" survives
+   * a prune. They are still removed if they disappear from disk.
    */
   async prune(
     project: string,
@@ -130,12 +154,13 @@ export class Ingestor {
       removedFiles: [],
     };
 
-    for (const { file } of indexed) {
+    for (const { file, forced } of indexed) {
       let reason: PruneReason;
       try {
         await stat(file);
-        // Still on disk — keep it unless a `.docignore` now excludes it.
-        if (!(await ignoreFiles.isFileIgnored(file))) continue;
+        // Still on disk — keep it unless a `.docignore` now excludes it and it
+        // was not deliberately forced in.
+        if (forced || !(await ignoreFiles.isFileIgnored(file))) continue;
         reason = "ignored";
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -154,11 +179,20 @@ export class Ingestor {
     return report;
   }
 
-  /** Resolve paths to a sorted, de-duplicated list of absolute file paths. */
-  private async expandPaths(paths: string[]): Promise<{ files: string[]; ignored: number }> {
-    const files = new Set<string>();
+  /**
+   * Resolve inputs to a sorted, de-duplicated map of absolute file path -> whether
+   * the file is being ingested under `force`.
+   */
+  private async expandPaths(
+    project: string,
+    paths: string[],
+    options: IngestOptions,
+  ): Promise<{ files: [string, boolean][]; ignored: number; refused: string[] }> {
+    const files = new Map<string, boolean>();
     const ignoreFiles = new DocignoreChainLoader();
+    const refused: string[] = [];
     let ignored = 0;
+
     for (const p of paths) {
       const abs = path.resolve(p);
       let stats;
@@ -173,28 +207,61 @@ export class Ingestor {
         // about a file and undo each other on alternating runs.
         const inherited = await ignoreFiles.chainFor(path.dirname(abs));
         const walked = await walkMarkdown(abs, inherited);
-        for (const f of walked.files) files.add(f);
+        // Anything the walk reached is by definition not excluded, so it is not
+        // forced — which is also how a file stops being forced: drop the pattern
+        // and re-ingest the directory.
+        for (const f of walked.files) if (!files.has(f)) files.set(f, false);
         ignored += walked.ignored;
       } else if (stats.isFile()) {
-        files.add(abs);
+        const decision = await this.resolveNamedFile(project, abs, ignoreFiles, options.force);
+        if (decision === "refused") {
+          refused.push(abs);
+          options.onRefused?.(abs);
+          continue;
+        }
+        files.set(abs, (files.get(abs) ?? false) || decision === "forced");
       } else {
         throw new Error(`Not a file or directory: ${p}`);
       }
     }
-    return { files: [...files].sort(), ignored };
+
+    return { files: [...files].sort((a, b) => a[0].localeCompare(b[0])), ignored, refused };
+  }
+
+  /**
+   * Decide what to do with a file named directly as an argument. Naming a file
+   * is explicit intent, but not a licence to ignore the exclusion rules — git
+   * refuses `git add` on an ignored path for the same reason, and points at
+   * `-f`. A file forced on an earlier run stays in without re-passing the flag.
+   */
+  private async resolveNamedFile(
+    project: string,
+    file: string,
+    ignoreFiles: DocignoreChainLoader,
+    force: boolean | undefined,
+  ): Promise<"normal" | "forced" | "refused"> {
+    if (!(await ignoreFiles.isFileIgnored(file))) return "normal";
+    if (force) return "forced";
+    const state = await this.store.getFileState(project, file);
+    return state?.forced ? "forced" : "refused";
   }
 
   /** Ingest one absolute file path. Returns the number of chunks written (0 if skipped). */
   private async ingestFile(
     project: string,
     file: string,
+    forced: boolean,
     onProgress?: (file: string, action: IngestAction) => void,
   ): Promise<number> {
     const content = await readFile(file, "utf8");
     const fileHash = sha256(content);
 
-    const storedHash = await this.store.getFileHash(project, file);
-    if (storedHash === fileHash) {
+    const stored = await this.store.getFileState(project, file);
+    if (stored?.hash === fileHash) {
+      // Content unchanged. The force flag still might have changed (a pattern
+      // was added, or dropped) — flip it in place rather than re-embedding the
+      // whole file to rewrite one column.
+      if (stored.forced !== forced) await this.store.setForced(project, file, forced);
       onProgress?.(file, "skipped");
       return 0;
     }
@@ -214,6 +281,7 @@ export class Ingestor {
       heading: c.heading,
       text: c.text,
       fileHash,
+      forced,
       vector: vectors[i]!,
     }));
 
