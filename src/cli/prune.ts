@@ -6,13 +6,15 @@ interface PruneArgs {
 }
 
 /**
- * `prune` command. Removes indexed docs whose source file no longer exists on
- * disk (deletions/renames leave orphaned chunks, since ingest is additive).
- * Thin wrapper over Ingestor.prune.
+ * `prune` command. Reconciles the index with the filesystem: removes indexed
+ * docs whose source file is gone (deletions/renames leave orphaned chunks, since
+ * ingest is additive) or is now excluded by a `.docignore`. Thin wrapper over
+ * Ingestor.prune.
  */
 export const pruneCommand: CommandModule<object, PruneArgs> = {
   command: "prune",
-  describe: "Remove indexed docs whose source file no longer exists on disk",
+  describe:
+    "Remove indexed docs whose source file is gone or is now excluded by a .docignore",
   builder: (yargs) =>
     yargs.option("project", {
       alias: "p",
@@ -24,12 +26,13 @@ export const pruneCommand: CommandModule<object, PruneArgs> = {
     const { ingestor } = createRag();
 
     console.error(`Pruning "${argv.project}" ...`);
-    const report = await ingestor.prune(argv.project, (file) => {
-      console.error(`  - ${file}`);
+    const report = await ingestor.prune(argv.project, (file, reason) => {
+      console.error(`  - ${file} (${reason})`);
     });
 
     console.error(
-      `Done: removed ${report.filesRemoved} of ${report.filesChecked} indexed files.`,
+      `Done: removed ${report.filesRemoved} of ${report.filesChecked} indexed files ` +
+        `(${report.filesMissing} missing, ${report.filesIgnored} ignored).`,
     );
   },
 };

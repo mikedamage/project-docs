@@ -103,10 +103,11 @@ server.registerTool(
     title: "Ingest project docs",
     description:
       "Index (or re-index) markdown/MDX docs into a project from a mix of files " +
-      "and directories. Directories are walked recursively for markdown; " +
-      "explicitly-named files are ingested as-is. Idempotent: unchanged files " +
-      "are skipped. Use absolute paths (the server's working directory is not " +
-      "guaranteed).",
+      "and directories. Directories are walked recursively for markdown, skipping " +
+      "anything matched by a .docignore file (gitignore-style globs, one per line, " +
+      "scoped to the directory holding it); explicitly-named files are ingested " +
+      "as-is. Idempotent: unchanged files are skipped. Use absolute paths (the " +
+      "server's working directory is not guaranteed).",
     inputSchema: {
       project: z.string().describe("Project id to ingest into."),
       paths: z
@@ -118,10 +119,13 @@ server.registerTool(
   },
   async ({ project, paths }) => {
     const report = await rag.ingestor.ingestPaths(project, paths);
+    const excluded = report.pathsIgnored
+      ? `\n  ${report.pathsIgnored} path(s) excluded by .docignore.`
+      : "";
     const text =
       `Ingested into "${project}":\n` +
       `  ${report.filesIngested} ingested, ${report.filesSkipped} unchanged, ` +
-      `${report.chunksWritten} chunks written (of ${report.filesSeen} files).`;
+      `${report.chunksWritten} chunks written (of ${report.filesSeen} files).${excluded}`;
     return { content: [{ type: "text", text }] };
   },
 );
@@ -131,10 +135,11 @@ server.registerTool(
   {
     title: "Prune deleted docs",
     description:
-      "Remove indexed docs from a project whose source file no longer exists on " +
-      "disk. Ingest is additive, so files deleted or renamed at the source leave " +
-      "orphaned chunks behind; this reconciles the index with the filesystem. " +
-      "Only genuinely-missing files are removed.",
+      "Reconcile a project's index with the filesystem. Ingest is additive, so " +
+      "this is what retires stale docs: those whose source file was deleted or " +
+      "renamed, and those still on disk but now excluded by a .docignore (a " +
+      "pattern added after they were indexed). Only genuinely-missing files " +
+      "count as deleted; nothing else is touched.",
     inputSchema: {
       project: z.string().describe("Project id to prune."),
     },
@@ -143,11 +148,12 @@ server.registerTool(
   async ({ project }) => {
     const report = await rag.ingestor.prune(project);
     const removed = report.removedFiles.length
-      ? `\n${report.removedFiles.map((f) => `  - ${f}`).join("\n")}`
+      ? `\n${report.removedFiles.map((r) => `  - ${r.file} (${r.reason})`).join("\n")}`
       : "";
     const text =
       `Pruned "${project}": removed ${report.filesRemoved} of ` +
-      `${report.filesChecked} indexed files.${removed}`;
+      `${report.filesChecked} indexed files ` +
+      `(${report.filesMissing} missing, ${report.filesIgnored} ignored).${removed}`;
     return { content: [{ type: "text", text }] };
   },
 );

@@ -45,6 +45,8 @@ src/core/
   embedder.ts   Embedder interface + OllamaEmbedder (nomic prefixes baked in)
   store.ts      VectorStore interface + LanceStore (one table per project)
   chunker.ts    header-aware markdown/MDX chunking (mdast-based)
+  docignore.ts  .docignore parsing/matching (one compiled regex per ignore file)
+                + DocignoreChainLoader (per-directory chain lookup, for prune)
   ingestor.ts   walk docs -> chunk -> embed -> upsert (idempotent via file hash)
   retriever.ts  embed query -> cosine search within a project
   index.ts      createRag() wiring point + public re-exports
@@ -80,7 +82,7 @@ npm run build                                       # tsc -> dist/ (+ chmod +x t
 npm link                                            # one-time: put project-docs on PATH
 npm run cli    -- --help                            # list all subcommands
 npm run ingest -- --project <id> <path>...          # index files and/or dirs
-npm run prune  -- --project <id>                    # drop indexed docs whose source file is gone
+npm run prune  -- --project <id>                    # drop indexed docs that are gone or now .docignore'd
 npm run query  -- --project <id> [--limit N] [--json] "question"
 npm run docs   -- --project <id> [--json]           # list indexed files + chunk counts
 npm run projects                                    # list projects
@@ -145,16 +147,54 @@ Consequences worth remembering:
   keep project ids slug-like. `listProjects()` returns the slug, not the raw id.
 - **Idempotent ingest:** each file's sha256 is stored on its chunks; re-ingesting
   skips files whose content is unchanged. Changed files are delete-then-insert.
-- **Ingest is additive; deletions are not detected.** Ingest only ever visits the
-  paths it's handed, so a source file deleted or renamed on disk leaves orphaned
-  chunks behind. Reconcile with `prune` (CLI) / `prune_docs` (MCP), which stats
-  every indexed file (keyed by absolute path) and drops those that no longer
-  exist. Only ENOENT counts as missing — other stat errors abort rather than risk
-  deleting still-present docs.
+- **Ingest is additive; nothing is retired except by `prune`.** Ingest only ever
+  visits the paths it's handed and never revisits what it already stored, so a
+  source file deleted or renamed on disk — or newly excluded by a `.docignore`
+  pattern added after it was indexed — leaves orphaned chunks behind. Reconcile
+  with `prune` (CLI) / `prune_docs` (MCP), which checks every indexed file (keyed
+  by absolute path) and drops it as **missing** (gone from disk) or **ignored**
+  (still there, now excluded); the report and both wrappers count the two
+  separately. Only ENOENT counts as missing — other stat errors abort rather than
+  risk deleting still-present docs.
 - **Chunks are keyed by resolved absolute path.** `ingest` takes any mix of files
   and directories (variadic positional); directories are walked recursively for
   markdown, named files are ingested as-is (any extension). Overlapping inputs are
   de-duplicated by absolute path.
+- **`.docignore` excludes files from directory walks.** Gitignore syntax and
+  semantics: one glob per line, `#` comments (first non-whitespace char), `!` to
+  re-include, trailing `/` for directory-only, a leading or interior `/` anchors
+  to the ignore file's own directory (otherwise the pattern matches at any depth),
+  `**` spans segments, last matching pattern wins. Nested like gitignore — a
+  `.docignore` applies to its own directory's subtree and overrides its parents,
+  and the chain is searched all the way up to the filesystem root — a `.docignore`
+  above the directory you hand to `ingest` still applies. One deliberate departure
+  from git: **explicitly-named file arguments bypass exclusion entirely** (naming
+  a file is explicit intent, same reason such files skip the markdown extension
+  filter). Excluded paths are counted in `IngestReport.pathsIgnored` and reported
+  by both wrappers; an excluded directory counts once.
+- **Ingest and prune must agree about exclusion, or they undo each other.** Both
+  resolve the same chain — the walk builds its stack as it descends and seeds it
+  from the ancestors above the root, while `prune` reconstructs it per path via
+  `DocignoreChainLoader` (memoised per directory, so cost is one `.docignore` read
+  attempt per distinct directory, not per file). Prune must also test each ancestor
+  *directory* of an indexed file, which is what makes a directory-only pattern
+  (`drafts/`) retire the files beneath it — the walk gets that for free by never
+  descending. Ancestor search exists on the ingest side purely to keep the two in
+  step: without it, a `.docignore` above the ingest root would have prune deleting
+  on every run what the next ingest re-adds. The one asymmetry left is deliberate:
+  prune is the authority on exclusion, so a file ingested as an explicit argument
+  despite matching a pattern is removed on the next prune.
+- **Ignore matching is one regex exec per path, not one per pattern.** Every
+  pattern in a `.docignore` compiles into a single anchored RegExp whose
+  alternatives are emitted in *reverse* source order. Anchoring makes "an
+  alternative matched" equivalent to "it matched the whole path", and the engine
+  commits to the first alternative that can — so reversing yields gitignore's
+  last-match-wins in one pass, and the set capture group identifies the winner.
+  Directories are tested with a trailing `/`, which is what lets one regex serve
+  both files and directories. Ingest cost is therefore O(paths x ignore-file
+  depth), and an ignored directory is pruned without being read, so excluding a
+  subtree costs one test rather than one per file inside it. Keep it that way: do
+  not add a per-pattern loop.
 - **MDX only for `.mdx`:** the chunker applies `remark-mdx` only to `.mdx` files —
   it treats `{...}`/`<tag>` as JSX, which would throw on plain `.md` prose.
 - **Chunker uses an AST, not regexes:** `#` inside a fenced code block is a real
