@@ -1,6 +1,7 @@
 {
   "name": "project-doc-reference-rag",
-  "version": "0.2.1",
+  "version": "0.2.2",
+  "author": "Mike Green",
   "description": "Local RAG over per-project markdown docs. Embedded LanceDB store + Ollama embeddings, exposed as CLI scripts and (later) an MCP server.",
   "type": "module",
   "bin": {
