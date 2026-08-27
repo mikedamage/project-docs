@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import * as lancedb from "@lancedb/lancedb";
 import type { RagConfig } from "./config.js";
-import type { EmbeddedChunk, IndexedFile, SearchResult } from "./types.js";
+import type { EmbeddedChunk, IndexedFile, IndexedFileState, SearchResult } from "./types.js";
 
 /**
  * Provider-agnostic vector store. Projects are isolated as separate physical
@@ -13,8 +13,10 @@ export interface VectorStore {
   replaceFile(project: string, file: string, chunks: EmbeddedChunk[]): Promise<void>;
   /** Delete all chunks for a file within a project. No-op if absent. */
   deleteFile(project: string, file: string): Promise<void>;
-  /** Stored file hash for a source file, or null if the file isn't indexed. */
-  getFileHash(project: string, file: string): Promise<string | null>;
+  /** Stored hash + force flag for a source file, or null if it isn't indexed. */
+  getFileState(project: string, file: string): Promise<IndexedFileState | null>;
+  /** Flip the stored force flag for a file, without touching its chunks. */
+  setForced(project: string, file: string, forced: boolean): Promise<void>;
   /** Nearest chunks to `vector` within a project. */
   search(project: string, vector: number[], limit: number): Promise<SearchResult[]>;
   /** Source files indexed in a project, with per-file chunk counts. */
@@ -37,6 +39,7 @@ interface Row {
   heading: string;
   text: string;
   fileHash: string;
+  forced: boolean;
   vector: number[];
   [key: string]: unknown;
 }
@@ -48,6 +51,8 @@ interface Row {
 export class LanceStore implements VectorStore {
   private readonly dataDir: string;
   private db: lancedb.Connection | null = null;
+  /** Tables already known to carry the `forced` column (see `migrate`). */
+  private readonly migrated = new Set<string>();
 
   constructor(config: RagConfig) {
     this.dataDir = config.dataDir;
@@ -79,7 +84,25 @@ export class LanceStore implements VectorStore {
     const name = this.tableName(project);
     const names = await db.tableNames();
     if (!names.includes(name)) return null;
-    return db.openTable(name);
+    const table = await db.openTable(name);
+    await this.migrate(name, table);
+    return table;
+  }
+
+  /**
+   * Backfill the `forced` column on tables written before `.docignore` support.
+   * LanceDB infers the schema from the first insert and then rejects any row
+   * carrying an unknown field ("Found field not in schema"), so without this
+   * every write to a pre-existing project would fail. Checked once per table
+   * per process; `addColumns` defaults existing rows to false.
+   */
+  private async migrate(name: string, table: lancedb.Table): Promise<void> {
+    if (this.migrated.has(name)) return;
+    const schema = await table.schema();
+    if (!schema.fields.some((f) => f.name === "forced")) {
+      await table.addColumns([{ name: "forced", valueSql: "false" }]);
+    }
+    this.migrated.add(name);
   }
 
   async replaceFile(project: string, file: string, chunks: EmbeddedChunk[]): Promise<void> {
@@ -93,6 +116,7 @@ export class LanceStore implements VectorStore {
       heading: c.heading,
       text: c.text,
       fileHash: c.fileHash,
+      forced: c.forced,
       vector: c.vector,
     }));
 
@@ -102,6 +126,7 @@ export class LanceStore implements VectorStore {
       await existing.add(rows);
     } else {
       await db.createTable(name, rows);
+      this.migrated.add(name); // created from `rows`, so the column is present
     }
   }
 
@@ -111,16 +136,24 @@ export class LanceStore implements VectorStore {
     await table.delete(`file = ${sqlString(file)}`);
   }
 
-  async getFileHash(project: string, file: string): Promise<string | null> {
+  async getFileState(project: string, file: string): Promise<IndexedFileState | null> {
     const table = await this.openTable(project);
     if (!table) return null;
     const rows = await table
       .query()
       .where(`file = ${sqlString(file)}`)
+      .select(["fileHash", "forced"]) // never pull the vector/text just to read a hash
       .limit(1)
       .toArray();
-    const first = rows[0] as Row | undefined;
-    return first?.fileHash ?? null;
+    const first = rows[0] as Pick<Row, "fileHash" | "forced"> | undefined;
+    if (!first) return null;
+    return { hash: first.fileHash, forced: Boolean(first.forced) };
+  }
+
+  async setForced(project: string, file: string, forced: boolean): Promise<void> {
+    const table = await this.openTable(project);
+    if (!table) return;
+    await table.update({ where: `file = ${sqlString(file)}`, values: { forced } });
   }
 
   async search(project: string, vector: number[], limit: number): Promise<SearchResult[]> {
@@ -146,16 +179,17 @@ export class LanceStore implements VectorStore {
   async listFiles(project: string): Promise<IndexedFile[]> {
     const table = await this.openTable(project);
     if (!table) return [];
-    // Plain query with no limit scans every row; select narrows to one column.
-    const rows = await table.query().select(["file"]).toArray();
-    const counts = new Map<string, number>();
+    // Plain query with no limit scans every row; select keeps it off the vectors.
+    const rows = await table.query().select(["file", "forced"]).toArray();
+    const files = new Map<string, IndexedFile>();
     for (const r of rows) {
-      const file = (r as { file?: unknown }).file;
-      if (typeof file === "string") counts.set(file, (counts.get(file) ?? 0) + 1);
+      const { file, forced } = r as { file?: unknown; forced?: unknown };
+      if (typeof file !== "string") continue;
+      const entry = files.get(file);
+      if (entry) entry.chunkCount++;
+      else files.set(file, { file, chunkCount: 1, forced: Boolean(forced) });
     }
-    return [...counts.entries()]
-      .map(([file, chunkCount]) => ({ file, chunkCount }))
-      .sort((a, b) => a.file.localeCompare(b.file));
+    return [...files.values()].sort((a, b) => a.file.localeCompare(b.file));
   }
 
   async listProjects(): Promise<string[]> {

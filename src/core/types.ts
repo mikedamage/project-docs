@@ -12,6 +12,12 @@ export interface Chunk {
   text: string;
   /** sha256 of the whole source file — used to skip unchanged files on re-ingest. */
   fileHash: string;
+  /**
+   * Ingested despite matching a `.docignore`, because it was named explicitly
+   * with `--force`. Sticky: it keeps the file ingestable without re-passing the
+   * flag, and keeps `prune` from retiring it as excluded.
+   */
+  forced: boolean;
 }
 
 /** A chunk with its embedding vector attached, ready to persist. */
@@ -23,6 +29,15 @@ export interface EmbeddedChunk extends Chunk {
 export interface IndexedFile {
   file: string;
   chunkCount: number;
+  /** Force-ingested despite matching a `.docignore` (see `Chunk.forced`). */
+  forced: boolean;
+}
+
+/** What the store knows about an already-indexed file. */
+export interface IndexedFileState {
+  /** sha256 of the file contents as last ingested. */
+  hash: string;
+  forced: boolean;
 }
 
 /** A retrieval hit returned to a consumer (CLI, MCP, etc.). */

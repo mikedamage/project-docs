@@ -1,31 +1,36 @@
 import { readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import ignore, { type Ignore } from "ignore";
 
 /** Name of the per-directory ignore file, discovered during the ingest walk. */
 export const DOCIGNORE_FILE = ".docignore";
 
 /**
+ * Match case-insensitively on macOS, matching git's own default there
+ * (`core.ignorecase` is set true on case-insensitive filesystems). Node reports
+ * the OS rather than us hardcoding a list; Windows is not a target, so it falls
+ * through to the case-sensitive branch.
+ */
+const IGNORE_CASE = os.type() === "Darwin";
+
+/**
  * A compiled `.docignore` file: the patterns of one ignore file, relative to the
  * directory that contains it.
  *
- * Every pattern in the file is compiled into a *single* anchored RegExp, so
- * testing a path costs one regex execution regardless of how many patterns the
- * file holds — not one execution per pattern.
- *
- * The alternatives are emitted in **reverse** source order. Because the regex is
- * anchored on both ends, "some alternative matched" is the same as "that
- * alternative matched the whole path", and the engine commits to the first
- * alternative that can do so. Reversing therefore makes the winning alternative
- * the *last* matching pattern in the file — gitignore's last-match-wins rule,
- * for free, in one pass.
+ * Pattern semantics are delegated wholesale to `ignore`, the same gitignore
+ * implementation ESLint and globby use. That is deliberate: translating globs to
+ * regexes by hand is the part of this feature with real bug surface (character
+ * classes, escaping, `**` spanning, last-match-wins ordering), and it is exactly
+ * the code that has historically produced ReDoS CVEs in glob libraries. What
+ * stays here is the part `ignore` has no concept of: locating ignore files,
+ * resolving paths relative to the one that owns them, and chaining nested files.
  */
 export class DocignoreMatcher {
   private constructor(
     /** Absolute directory the patterns are relative to (where the file lives). */
     readonly base: string,
-    private readonly regex: RegExp,
-    /** `negated[i]` is the `!` flag of the pattern behind capture group `i + 1`. */
-    private readonly negated: boolean[],
+    private readonly rules: Ignore,
   ) {}
 
   /**
@@ -33,43 +38,38 @@ export class DocignoreMatcher {
    * no usable patterns (all blank/comments), so callers can skip it entirely.
    */
   static compile(base: string, content: string): DocignoreMatcher | null {
-    const entries: { source: string; negated: boolean }[] = [];
-    for (const line of content.split(/\r?\n/)) {
-      const entry = parseLine(line);
-      if (entry) entries.push(entry);
-    }
-    if (entries.length === 0) return null;
+    // Mirrors what `ignore` itself skips: a line is a pattern unless it is empty
+    // or starts with `#`. Leading whitespace is significant (git treats it as
+    // part of the pattern), so only the trailing end is trimmed here.
+    const hasPattern = content
+      .split(/\r?\n/)
+      .some((line) => {
+        const trimmed = line.trimEnd();
+        return trimmed !== "" && !trimmed.startsWith("#");
+      });
+    if (!hasPattern) return null;
 
-    // Reverse so the first alternative to match is the last pattern in the file.
-    entries.reverse();
-    const regex = new RegExp(`^(?:${entries.map((e) => `(${e.source})`).join("|")})$`);
-    return new DocignoreMatcher(
-      path.resolve(base),
-      regex,
-      entries.map((e) => e.negated),
-    );
+    return new DocignoreMatcher(path.resolve(base), ignore({ ignorecase: IGNORE_CASE }).add(content));
   }
 
   /**
    * Verdict for one path: `true` = excluded, `false` = explicitly re-included by
    * a `!` pattern, `undefined` = no pattern matched (the caller should fall
-   * through to the next ignore file up the tree).
+   * through to the next ignore file up the tree). That third state is why this
+   * uses `test()` rather than `ignores()`, which collapses "re-included" and
+   * "never mentioned" into one `false`.
    *
-   * Directories are tested with a trailing `/`, which is what lets a single
-   * regex serve both: a directory-only pattern (`build/`) requires that slash,
-   * while every other pattern tolerates it.
+   * Directories are tested with a trailing `/`, which is what makes a
+   * directory-only pattern (`build/`) apply to them and not to a file of the
+   * same name.
    */
   verdict(absPath: string, isDirectory: boolean): boolean | undefined {
     const rel = this.relativize(absPath);
     if (rel === undefined) return undefined;
 
-    const match = this.regex.exec(isDirectory ? `${rel}/` : rel);
-    if (!match) return undefined;
-
-    // Exactly one group is set: the alternative the engine committed to.
-    for (let i = 1; i < match.length; i++) {
-      if (match[i] !== undefined) return !this.negated[i - 1];
-    }
+    const { ignored, unignored } = this.rules.test(isDirectory ? `${rel}/` : rel);
+    if (ignored) return true;
+    if (unignored) return false;
     return undefined;
   }
 
@@ -102,118 +102,6 @@ export function isIgnored(
   }
   return false;
 }
-
-/** Parse one line into a regex source + negation flag, or null if it is not a pattern. */
-function parseLine(rawLine: string): { source: string; negated: boolean } | null {
-  let line = stripTrailingSpace(rawLine).trimStart();
-  if (line === "" || line.startsWith("#")) return null; // blank or comment
-
-  const negated = line.startsWith("!");
-  if (negated) line = line.slice(1);
-
-  const directoryOnly = line.endsWith("/");
-  if (directoryOnly) line = line.slice(0, -1);
-  // A pattern with an interior slash is anchored to the ignore file's directory;
-  // one without matches at any depth below it.
-  const anchored = line.includes("/");
-  if (line.startsWith("/")) line = line.slice(1);
-  if (line === "") return null;
-
-  const prefix = anchored ? "" : "(?:[^/]+/)*";
-  const suffix = directoryOnly ? "/" : "/?";
-  return { source: prefix + globToRegex(line) + suffix, negated };
-}
-
-/** Translate a glob body (slash-separated) to regex source. Emits no capture groups. */
-function globToRegex(glob: string): string {
-  const segments = glob.split("/");
-  let source = "";
-  for (let i = 0; i < segments.length; i++) {
-    const segment = segments[i]!;
-    const isLast = i === segments.length - 1;
-    if (segment === "**") {
-      // `**` spans zero or more path segments; trailing `**` means "everything
-      // inside", which requires at least one.
-      source += isLast ? ".+" : "(?:[^/]+/)*";
-      continue;
-    }
-    source += segmentToRegex(segment);
-    if (!isLast) source += "/";
-  }
-  return source;
-}
-
-/** Translate one path segment: `*` and `?` never cross a `/`. */
-function segmentToRegex(segment: string): string {
-  let source = "";
-  for (let i = 0; i < segment.length; i++) {
-    const char = segment[i]!;
-    if (char === "\\") {
-      const next = segment[++i];
-      source += next === undefined ? "\\\\" : escapeLiteral(next);
-    } else if (char === "*") {
-      while (segment[i + 1] === "*") i++; // `a**b` degrades to `a*b` within a segment
-      source += "[^/]*";
-    } else if (char === "?") {
-      source += "[^/]";
-    } else if (char === "[") {
-      const cls = readCharClass(segment, i);
-      if (cls) {
-        source += cls.source;
-        i = cls.end;
-      } else {
-        source += "\\[";
-      }
-    } else {
-      source += escapeLiteral(char);
-    }
-  }
-  return source;
-}
-
-/** Read a `[...]` / `[!...]` class starting at `start`; null if unterminated. */
-function readCharClass(segment: string, start: number): { source: string; end: number } | null {
-  let i = start + 1;
-  let negate = false;
-  if (segment[i] === "!" || segment[i] === "^") {
-    negate = true;
-    i++;
-  }
-  let body = "";
-  if (segment[i] === "]") {
-    body += "\\]"; // a `]` in first position is a literal
-    i++;
-  }
-  for (; i < segment.length; i++) {
-    const char = segment[i]!;
-    if (char === "]") {
-      if (body === "") return null;
-      return { source: `[${negate ? "^" : ""}${body}]`, end: i };
-    }
-    if (char === "/") return null; // a class may not span segments
-    body += char === "\\" || char === "[" ? `\\${char}` : char;
-  }
-  return null;
-}
-
-const REGEX_METACHARS = /[.*+?^${}()|[\]\\]/;
-
-function escapeLiteral(char: string): string {
-  return REGEX_METACHARS.test(char) ? `\\${char}` : char;
-}
-
-/** Drop trailing spaces/tabs unless backslash-escaped (`foo\ ` keeps its space). */
-function stripTrailingSpace(line: string): string {
-  let end = line.length;
-  while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) {
-    let backslashes = 0;
-    for (let i = end - 2; i >= 0 && line[i] === "\\"; i--) backslashes++;
-    if (backslashes % 2 === 1) break; // escaped — this whitespace is part of the pattern
-    end--;
-  }
-  return line.slice(0, end);
-}
-
 
 /**
  * Loads and caches the `.docignore` files that apply to a directory: the chain
@@ -249,9 +137,14 @@ export class DocignoreChainLoader {
 
   /**
    * Whether a directory is excluded — itself, or by inheritance from an excluded
-   * ancestor. The ingest walk gets this by never descending into an excluded
-   * directory; reconstructing it here is what makes a directory-only pattern
-   * (`drafts/`) also exclude the files beneath it.
+   * ancestor. The ingest walk gets this for free by never descending into an
+   * excluded directory.
+   *
+   * `ignore` already applies containment *within* one file (`drafts/` covers
+   * `drafts/a/b.md`), so this is not what makes directory-only patterns work any
+   * more. It is still required across the chain: without it, a `.docignore`
+   * nested inside an excluded directory could re-include a file with `!`, which
+   * git forbids and the walk makes impossible by never reading that file at all.
    */
   async isDirectoryIgnored(dir: string): Promise<boolean> {
     const cached = this.ignoredDirs.get(dir);

@@ -52,7 +52,10 @@ server.registerTool(
   "list_docs",
   {
     title: "List indexed docs",
-    description: "List the source files indexed for a project, with per-file chunk counts.",
+    description:
+      "List the source files indexed for a project, with per-file chunk counts. " +
+      "A file marked (forced) was ingested despite matching a .docignore and is " +
+      "exempt from prune_docs.",
     inputSchema: {
       project: z.string().describe("Project id to inspect (see list_projects)."),
     },
@@ -63,7 +66,9 @@ server.registerTool(
     if (files.length === 0) {
       return { content: [{ type: "text", text: `No docs indexed for project "${project}".` }] };
     }
-    const text = files.map((f) => `${f.chunkCount}\t${f.file}`).join("\n");
+    const text = files
+      .map((f) => `${f.chunkCount}\t${f.file}${f.forced ? "\t(forced)" : ""}`)
+      .join("\n");
     return { content: [{ type: "text", text }] };
   },
 );
@@ -105,27 +110,44 @@ server.registerTool(
       "Index (or re-index) markdown/MDX docs into a project from a mix of files " +
       "and directories. Directories are walked recursively for markdown, skipping " +
       "anything matched by a .docignore file (gitignore-style globs, one per line, " +
-      "scoped to the directory holding it); explicitly-named files are ingested " +
-      "as-is. Idempotent: unchanged files are skipped. Use absolute paths (the " +
-      "server's working directory is not guaranteed).",
+      "scoped to the directory holding it). A named file that is excluded is " +
+      "refused and reported unless force is set. Idempotent: unchanged files are " +
+      "skipped. Use absolute paths (the server's working directory is not " +
+      "guaranteed).",
     inputSchema: {
       project: z.string().describe("Project id to ingest into."),
       paths: z
         .array(z.string())
         .min(1)
         .describe("Absolute paths to files and/or directories to ingest."),
+      force: z
+        .boolean()
+        .optional()
+        .describe(
+          "Ingest named files even when a .docignore excludes them, and keep them " +
+            "(they survive prune_docs). Ignored for directory arguments — a walk " +
+            "always honours exclusions.",
+        ),
     },
     annotations: { idempotentHint: true },
   },
-  async ({ project, paths }) => {
-    const report = await rag.ingestor.ingestPaths(project, paths);
-    const excluded = report.pathsIgnored
-      ? `\n  ${report.pathsIgnored} path(s) excluded by .docignore.`
-      : "";
+  async ({ project, paths, force }) => {
+    const report = await rag.ingestor.ingestPaths(project, paths, { force });
+    const notes: string[] = [];
+    if (report.pathsIgnored) notes.push(`  ${report.pathsIgnored} path(s) excluded by .docignore.`);
+    if (report.filesForced) notes.push(`  ${report.filesForced} file(s) forced in despite exclusion.`);
+    if (report.refusedPaths.length) {
+      notes.push(
+        `  ${report.refusedPaths.length} named file(s) refused as excluded by .docignore ` +
+          "— re-run with force: true to ingest them anyway:",
+        ...report.refusedPaths.map((f) => `    - ${f}`),
+      );
+    }
     const text =
       `Ingested into "${project}":\n` +
       `  ${report.filesIngested} ingested, ${report.filesSkipped} unchanged, ` +
-      `${report.chunksWritten} chunks written (of ${report.filesSeen} files).${excluded}`;
+      `${report.chunksWritten} chunks written (of ${report.filesSeen} files).` +
+      (notes.length ? `\n${notes.join("\n")}` : "");
     return { content: [{ type: "text", text }] };
   },
 );
@@ -138,8 +160,9 @@ server.registerTool(
       "Reconcile a project's index with the filesystem. Ingest is additive, so " +
       "this is what retires stale docs: those whose source file was deleted or " +
       "renamed, and those still on disk but now excluded by a .docignore (a " +
-      "pattern added after they were indexed). Only genuinely-missing files " +
-      "count as deleted; nothing else is touched.",
+      "pattern added after they were indexed). Files ingested with force are " +
+      "kept even though they match. Only genuinely-missing files count as " +
+      "deleted; nothing else is touched.",
     inputSchema: {
       project: z.string().describe("Project id to prune."),
     },
