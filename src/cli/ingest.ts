@@ -1,5 +1,5 @@
 import type { CommandModule } from "yargs";
-import { createRag } from "../core/index.js";
+import { createRag, DOCIGNORE_FILE } from "../core/index.js";
 
 interface IngestArgs {
   project: string;
@@ -25,7 +25,9 @@ export const ingestCommand: CommandModule<object, IngestArgs> = {
         type: "string",
         array: true,
         demandOption: true,
-        describe: "Files or directories to ingest (directories are walked recursively for markdown)",
+        describe:
+          "Files or directories to ingest (directories are walked recursively for " +
+          `markdown, honouring ${DOCIGNORE_FILE} files)`,
       }),
   handler: async (argv) => {
     const { ingestor } = createRag();
@@ -35,9 +37,12 @@ export const ingestCommand: CommandModule<object, IngestArgs> = {
       console.error(`  ${action === "ingested" ? "+" : "="} ${file}`);
     });
 
+    const excluded = report.pathsIgnored
+      ? ` ${report.pathsIgnored} path(s) excluded by ${DOCIGNORE_FILE}.`
+      : "";
     console.error(
       `Done: ${report.filesIngested} ingested, ${report.filesSkipped} unchanged, ` +
-        `${report.chunksWritten} chunks written (of ${report.filesSeen} files).`,
+        `${report.chunksWritten} chunks written (of ${report.filesSeen} files).${excluded}`,
     );
   },
 };

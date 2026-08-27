@@ -3,6 +3,12 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { chunkMarkdown } from "./chunker.js";
 import type { RagConfig } from "./config.js";
+import {
+  DOCIGNORE_FILE,
+  DocignoreChainLoader,
+  DocignoreMatcher,
+  isIgnored,
+} from "./docignore.js";
 import type { Embedder } from "./embedder.js";
 import type { VectorStore } from "./store.js";
 import type { EmbeddedChunk } from "./types.js";
@@ -15,15 +21,28 @@ export interface IngestReport {
   filesIngested: number;
   filesSkipped: number;
   chunksWritten: number;
+  /**
+   * Paths excluded by a `.docignore` during directory walks. An excluded
+   * directory counts once — its contents are never visited, so they are not
+   * counted individually.
+   */
+  pathsIgnored: number;
 }
 
 export type IngestAction = "ingested" | "skipped";
+
+/** Why a pruned file was dropped from the index. */
+export type PruneReason = "missing" | "ignored";
 
 export interface PruneReport {
   project: string;
   filesChecked: number;
   filesRemoved: number;
-  removedFiles: string[];
+  /** Removed because the source file no longer exists on disk. */
+  filesMissing: number;
+  /** Removed because the source file is now excluded by a `.docignore`. */
+  filesIgnored: number;
+  removedFiles: { file: string; reason: PruneReason }[];
 }
 
 /**
@@ -34,6 +53,11 @@ export interface PruneReport {
  * Chunks are keyed by the file's resolved absolute path, so the same file is
  * identified consistently regardless of how it was passed in (as a direct
  * argument or discovered under a directory).
+ *
+ * Directory walks honour `.docignore` files (see `docignore.ts`): gitignore-style
+ * globs, one per line, relative to the directory holding the file and applying to
+ * its subtree. Explicitly-named file arguments bypass them — naming a file is
+ * explicit intent, the same reason such files skip the markdown extension filter.
  */
 export class Ingestor {
   constructor(
@@ -52,13 +76,14 @@ export class Ingestor {
     paths: string[],
     onProgress?: (file: string, action: IngestAction) => void,
   ): Promise<IngestReport> {
-    const files = await this.expandPaths(paths);
+    const { files, ignored } = await this.expandPaths(paths);
     const report: IngestReport = {
       project,
       filesSeen: files.length,
       filesIngested: 0,
       filesSkipped: 0,
       chunksWritten: 0,
+      pathsIgnored: ignored,
     };
 
     for (const file of files) {
@@ -75,44 +100,65 @@ export class Ingestor {
   }
 
   /**
-   * Remove indexed docs whose source file no longer exists on disk. Chunks are
-   * keyed by absolute path, so each indexed file can be stat'd directly. Only
-   * genuinely-missing files (ENOENT) are pruned; any other stat error (e.g. a
-   * permissions problem) aborts rather than risk deleting still-present docs.
+   * Reconcile the index with the filesystem. Chunks are keyed by absolute path,
+   * so each indexed file can be checked directly. Two things get dropped:
+   *
+   * - **missing** — the source file no longer exists. Only ENOENT counts; any
+   *   other stat error (e.g. a permissions problem) aborts rather than risk
+   *   deleting still-present docs.
+   * - **ignored** — the file still exists but is now excluded by a `.docignore`,
+   *   because a pattern was added after it was indexed. Ingest is additive and
+   *   never revisits what it already stored, so this is the only thing that
+   *   retires those chunks.
+   *
+   * Note that this makes prune the authority on exclusion: a file that ingest
+   * accepted *because it was named explicitly* (explicit arguments bypass
+   * `.docignore`) is still removed here if it matches a pattern.
    */
   async prune(
     project: string,
-    onRemove?: (file: string) => void,
+    onRemove?: (file: string, reason: PruneReason) => void,
   ): Promise<PruneReport> {
     const indexed = await this.store.listFiles(project);
+    const ignoreFiles = new DocignoreChainLoader();
     const report: PruneReport = {
       project,
       filesChecked: indexed.length,
       filesRemoved: 0,
+      filesMissing: 0,
+      filesIgnored: 0,
       removedFiles: [],
     };
 
     for (const { file } of indexed) {
+      let reason: PruneReason;
       try {
         await stat(file);
-        continue; // still on disk — keep it
+        // Still on disk — keep it unless a `.docignore` now excludes it.
+        if (!(await ignoreFiles.isFileIgnored(file))) continue;
+        reason = "ignored";
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
           throw new Error(`Cannot stat "${file}" while pruning: ${(err as Error).message}`);
         }
+        reason = "missing";
       }
       await this.store.deleteFile(project, file);
       report.filesRemoved++;
-      report.removedFiles.push(file);
-      onRemove?.(file);
+      if (reason === "missing") report.filesMissing++;
+      else report.filesIgnored++;
+      report.removedFiles.push({ file, reason });
+      onRemove?.(file, reason);
     }
 
     return report;
   }
 
   /** Resolve paths to a sorted, de-duplicated list of absolute file paths. */
-  private async expandPaths(paths: string[]): Promise<string[]> {
+  private async expandPaths(paths: string[]): Promise<{ files: string[]; ignored: number }> {
     const files = new Set<string>();
+    const ignoreFiles = new DocignoreChainLoader();
+    let ignored = 0;
     for (const p of paths) {
       const abs = path.resolve(p);
       let stats;
@@ -122,14 +168,20 @@ export class Ingestor {
         throw new Error(`Path does not exist: ${p}`);
       }
       if (stats.isDirectory()) {
-        for (const f of await walkMarkdown(abs)) files.add(f);
+        // Seed with the ignore files above this root; the walk loads the root's
+        // own. Prune reconstructs the same chain, so the two cannot disagree
+        // about a file and undo each other on alternating runs.
+        const inherited = await ignoreFiles.chainFor(path.dirname(abs));
+        const walked = await walkMarkdown(abs, inherited);
+        for (const f of walked.files) files.add(f);
+        ignored += walked.ignored;
       } else if (stats.isFile()) {
         files.add(abs);
       } else {
         throw new Error(`Not a file or directory: ${p}`);
       }
     }
-    return [...files].sort();
+    return { files: [...files].sort(), ignored };
   }
 
   /** Ingest one absolute file path. Returns the number of chunks written (0 if skipped). */
@@ -175,17 +227,48 @@ function sha256(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-async function walkMarkdown(dir: string): Promise<string[]> {
+/**
+ * Recursively collect markdown files, honouring `.docignore`.
+ *
+ * `stack` holds the compiled ignore files of the ancestor directories, ordered
+ * shallowest → deepest; the walk pushes this directory's own `.docignore` onto
+ * it before descending. An ignored directory is skipped without being read, so
+ * excluding a subtree costs one regex test rather than one per file inside it.
+ */
+async function walkMarkdown(
+  dir: string,
+  stack: readonly DocignoreMatcher[],
+): Promise<{ files: string[]; ignored: number }> {
   const entries = await readdir(dir, { withFileTypes: true });
+
+  // The listing already tells us whether an ignore file is here — no extra stat.
+  let active = stack;
+  if (entries.some((e) => e.name === DOCIGNORE_FILE && e.isFile())) {
+    const source = await readFile(path.join(dir, DOCIGNORE_FILE), "utf8");
+    const matcher = DocignoreMatcher.compile(dir, source);
+    if (matcher) active = [...stack, matcher];
+  }
+
   const files: string[] = [];
+  let ignored = 0;
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-      files.push(...(await walkMarkdown(full)));
+      if (isIgnored(active, full, true)) {
+        ignored++;
+        continue; // prune the whole subtree
+      }
+      const walked = await walkMarkdown(full, active);
+      files.push(...walked.files);
+      ignored += walked.ignored;
     } else if (MARKDOWN_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      if (isIgnored(active, full, false)) {
+        ignored++;
+        continue;
+      }
       files.push(full);
     }
   }
-  return files.sort();
+  return { files: files.sort(), ignored };
 }

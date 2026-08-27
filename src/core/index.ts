@@ -8,7 +8,18 @@ export * from "./types.js";
 export { loadConfig, type RagConfig } from "./config.js";
 export { type Embedder, OllamaEmbedder } from "./embedder.js";
 export { type VectorStore, LanceStore } from "./store.js";
-export { Ingestor, type IngestReport } from "./ingestor.js";
+export {
+  Ingestor,
+  type IngestReport,
+  type PruneReport,
+  type PruneReason,
+} from "./ingestor.js";
+export {
+  DOCIGNORE_FILE,
+  DocignoreChainLoader,
+  DocignoreMatcher,
+  isIgnored,
+} from "./docignore.js";
 export { Retriever, type RetrieveOptions } from "./retriever.js";
 
 export interface Rag {
