@@ -2,7 +2,7 @@
   "name": "project-docs",
   "version": "0.2.2",
   "author": "Mike Green",
-  "description": "Local RAG over per-project markdown docs. Embedded LanceDB store + Ollama embeddings, exposed as CLI scripts and (later) an MCP server.",
+  "description": "Local RAG over per-project markdown docs. Embedded LanceDB store + Ollama embeddings, exposed as a CLI and a stdio MCP server.",
   "type": "module",
   "bin": {
     "project-docs": "./dist/bin/project-docs.js"

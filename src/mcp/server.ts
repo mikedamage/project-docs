@@ -10,7 +10,8 @@ import type { SearchResult } from "../core/index.js";
  *
  * Design contract: this server contains NO retrieval logic. It wires up the
  * same `createRag()` core the CLI uses and maps each tool to a core method, so
- * Claude Code / Claude Desktop get behavior identical to the command line.
+ * MCP clients (Claude Code, Codex, Claude Desktop) get behavior identical to the
+ * command line.
  *
  * stdio note: only MCP protocol frames may go to stdout. All human-readable
  * output must go to stderr (the core's progress callbacks already do).
@@ -18,8 +19,9 @@ import type { SearchResult } from "../core/index.js";
 const rag = createRag();
 
 const server = new McpServer({
-  name: "doc-reference-rag",
-  version: "0.1.0",
+  // Matches the package and binary name; keep `version` in sync with package.json.
+  name: "project-docs",
+  version: "0.2.2",
 });
 
 /**
@@ -30,7 +32,7 @@ const server = new McpServer({
 export async function startMcpServer(): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`doc-reference-rag MCP server ready (data: ${rag.config.dataDir}).`);
+  console.error(`project-docs MCP server ready (data: ${rag.config.dataDir}).`);
 }
 
 server.registerTool(

@@ -277,7 +277,7 @@ npm link          # from the repo root; one-time
 Then the client config needs no paths at all:
 
 ```bash
-claude mcp add doc-reference-rag -- project-docs mcp
+claude mcp add project-docs -- project-docs mcp
 ```
 
 `npm link` symlinks the global bin to `dist/bin/project-docs.js` **inside this
@@ -291,14 +291,14 @@ repo**, so:
 - **Moving or deleting the repo breaks the command**, since the target is a path
   into the working tree.
 
-Undo with `npm unlink -g project-doc-reference-rag`.
+Undo with `npm unlink -g project-docs`.
 
 For iterating on the server itself, point the client at the sources instead —
 picks up edits with no rebuild, at the cost of `tsx` startup on every client
 launch:
 
 ```bash
-claude mcp add doc-reference-rag -- npx -y tsx /Users/mike/dev/project-doc-reference-rag/src/mcp/server.ts
+claude mcp add project-docs -- npx -y tsx /Users/mike/dev/project-doc-reference-rag/src/mcp/server.ts
 ```
 
 ## Status / not yet built

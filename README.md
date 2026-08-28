@@ -1,4 +1,4 @@
-# project-doc-reference-rag
+# project-docs
 
 Local RAG over the markdown docs of the projects you work on. Docs are segregated
 by project so queries only return context relevant to what you're building.

@@ -1,6 +1,6 @@
 # Phase 1: Code Chunking & Hybrid Retrieval
 
-Design for teaching `project-doc-reference-rag` to index source code alongside
+Design for teaching `project-docs` to index source code alongside
 markdown, so a single query returns both the prose that explains a thing and the
 code that implements it.
 
