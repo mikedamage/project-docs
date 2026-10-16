@@ -44,15 +44,15 @@ single table delete and cross-project leakage is impossible.
 
 ## Install
 
-Published to npm as **`project-doc-reference-rag`**, exposing a single executable,
+Published to npm as **`project-docs`**, exposing a single executable,
 `project-docs`.
 
 ```bash
 # No install — run the published CLI on demand
-npx -y project-doc-reference-rag --help
+npx -y project-docs --help
 
 # Or install it globally so `project-docs` is on your PATH
-npm install -g project-doc-reference-rag
+npm install -g project-docs
 project-docs --help
 ```
 
@@ -69,7 +69,7 @@ project you open can query its own docs. The server is project-scoped at the
 ### Claude Code
 
 ```bash
-claude mcp add doc-reference-rag -s user -- npx -y project-doc-reference-rag mcp
+claude mcp add project-docs -s user -- npx -y project-docs mcp
 ```
 
 `-s user` is what makes it global; the default (`local`) would scope it to the
@@ -78,27 +78,27 @@ current directory. Verify with `claude mcp list`, then `/mcp` inside a session.
 To pass config (see [Config](#config-env-vars) below), add `-e`:
 
 ```bash
-claude mcp add doc-reference-rag -s user \
+claude mcp add project-docs -s user \
   -e OLLAMA_URL=http://localhost:11434 \
-  -- npx -y project-doc-reference-rag mcp
+  -- npx -y project-docs mcp
 ```
 
 ### Codex
 
 ```bash
-codex mcp add doc-reference-rag -- npx -y project-doc-reference-rag mcp
+codex mcp add project-docs -- npx -y project-docs mcp
 ```
 
 Codex's MCP registry is global already — it writes to `~/.codex/config.toml`:
 
 ```toml
-[mcp_servers.doc-reference-rag]
+[mcp_servers.project-docs]
 command = "npx"
-args = ["-y", "project-doc-reference-rag", "mcp"]
+args = ["-y", "project-docs", "mcp"]
 ```
 
-Verify with `codex mcp list` (or `codex mcp get doc-reference-rag`). Env vars go
-in an `[mcp_servers.doc-reference-rag.env]` table, or via `--env KEY=VALUE` on
+Verify with `codex mcp list` (or `codex mcp get project-docs`). Env vars go
+in an `[mcp_servers.project-docs.env]` table, or via `--env KEY=VALUE` on
 `codex mcp add`.
 
 ### npx vs. a global install
@@ -107,11 +107,11 @@ in an `[mcp_servers.doc-reference-rag.env]` table, or via `--env KEY=VALUE` on
 registry on a cold cache — that shows up as MCP-client startup latency and fails
 outright offline. Two ways to make startup deterministic:
 
-- **Pin the version:** `npx -y project-doc-reference-rag@0.2.2 mcp` — cached after
+- **Pin the version:** `npx -y project-docs@0.2.2 mcp` — cached after
   the first run, and an upstream release can't change what your client launches.
-- **Install globally and drop npx** — `npm install -g project-doc-reference-rag`,
+- **Install globally and drop npx** — `npm install -g project-docs`,
   then use `command = "project-docs"` with `args = ["mcp"]` (Claude Code:
-  `claude mcp add doc-reference-rag -s user -- project-docs mcp`). Fastest start;
+  `claude mcp add project-docs -s user -- project-docs mcp`). Fastest start;
   you upgrade on your own schedule with `npm update -g`.
 
 The server logs to **stderr** and speaks MCP on stdout, so a client that reports
@@ -121,7 +121,7 @@ The server logs to **stderr** and speaks MCP on stdout, so a client that reports
 
 Everything is a subcommand of the single `project-docs` binary. The examples below
 assume a global install; with `npx` prefix each one with
-`npx -y project-doc-reference-rag`, and from a source checkout use the `npm run`
+`npx -y project-docs`, and from a source checkout use the `npm run`
 aliases (`npm run ingest -- --project my-app ...`).
 
 ```bash
@@ -147,6 +147,10 @@ project-docs docs --project my-app --json
 project-docs projects                  # list
 project-docs projects --drop my-app    # delete
 
+# Which store will be used (see "Store location")
+project-docs where
+project-docs --data-dir ./.project-docs where
+
 # Full help / command list
 project-docs --help
 ```
@@ -157,13 +161,53 @@ per-file sha256).
 The CLI and the MCP server share one store, so it is normal to seed a project from
 the command line and then query it from Claude Code or Codex.
 
+## Store location
+
+The LanceDB store lives in one directory, resolved in this order:
+
+1. `--data-dir <path>` (a global flag, accepted by every subcommand including `mcp`)
+2. `RAG_DATA_DIR`
+3. `$XDG_DATA_HOME/project-docs`, if `XDG_DATA_HOME` is set and absolute
+4. The OS-native per-user data dir (macOS `~/Library/Application Support/project-docs`)
+
+Relative paths resolve against the current directory. Run `project-docs where` to
+see which store an invocation will use and which setting chose it. `ingest`,
+`prune`, `docs` and `projects` print the store path on stderr, and so do the
+`ingest_docs`, `prune_docs` and `list_projects` MCP tools. The CLI and the MCP
+server resolve the store independently, and pointing them at different stores
+does not raise an error: queries just come back empty or stale. The printed path
+is how you catch that.
+
+The directory is created if it is missing. A path that cannot be created or
+written fails with a clear error before any data is written.
+
+### Per-project stores (sandboxed agents)
+
+Some agent sandboxes only allow writes inside the project directory, so ingesting
+into the per-user default fails with `Operation not permitted`. In that case,
+keep the store inside the repo:
+
+```bash
+cd ~/dev/my-app
+export RAG_DATA_DIR="$PWD/.project-docs"
+project-docs ingest -p my-app docs
+project-docs query  -p my-app "how is auth configured?"
+```
+
+A store directory that `project-docs` creates contains a `.gitignore` of `*`, so
+it never shows up in `git status` and the repo's own `.gitignore` needs no entry.
+For Claude Code, set the variable once per repo in `.claude/settings.local.json`
+(`{"env": {"RAG_DATA_DIR": "/abs/path/to/my-app/.project-docs"}}`) rather than
+exporting it in every shell. If you also run the MCP server for that repo, give
+its `env` the same absolute path.
+
 ## Config (env vars)
 
 These apply to the CLI and the MCP server alike.
 
 | Var                    | Default                  |
 | ---------------------- | ------------------------ |
-| `RAG_DATA_DIR`         | OS-native per-user data dir (macOS `~/Library/Application Support/project-docs`, Win `%LOCALAPPDATA%\project-docs`, else `~/.local/share/project-docs`) |
+| `RAG_DATA_DIR`         | OS-native per-user data dir; see [Store location](#store-location) (macOS `~/Library/Application Support/project-docs`, Win `%LOCALAPPDATA%\project-docs`, else `~/.local/share/project-docs`) |
 | `OLLAMA_URL`           | `http://localhost:11434` |
 | `RAG_EMBEDDING_MODEL`  | `nomic-embed-text`       |
 | `RAG_EMBEDDING_DIMS`   | `768`                    |
@@ -184,6 +228,6 @@ To point an MCP client at your working tree instead of the published package,
 register `npx` with `tsx`:
 
 ```bash
-claude mcp add doc-reference-rag-dev -s user \
+claude mcp add project-docs-dev -s user \
   -- npx tsx /absolute/path/to/project-doc-reference-rag/bin/project-docs.ts mcp
 ```

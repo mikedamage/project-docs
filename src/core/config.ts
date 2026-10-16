@@ -61,15 +61,33 @@ function defaultDataDir(): string {
   }
 }
 
+/** Where the resolved data dir came from, highest precedence first. */
+export type DataDirSource = "flag" | "env" | "default";
+
+/**
+ * Resolve the data dir: an explicit value (the `--data-dir` flag, or a
+ * `dataDir` override) > `RAG_DATA_DIR` > the platform default (which itself
+ * honours `XDG_DATA_HOME`). Empty strings count as unset. Relative paths
+ * resolve against cwd, so the result is always absolute — the path printed to
+ * the user is the path actually written.
+ */
+export function resolveDataDir(explicit?: string): { dataDir: string; source: DataDirSource } {
+  if (explicit) return { dataDir: path.resolve(explicit), source: "flag" };
+  const env = process.env.RAG_DATA_DIR;
+  if (env) return { dataDir: path.resolve(env), source: "env" };
+  return { dataDir: defaultDataDir(), source: "default" };
+}
+
 export function loadConfig(overrides: Partial<RagConfig> = {}): RagConfig {
+  const { dataDir, ...rest } = overrides;
   return {
-    dataDir: process.env.RAG_DATA_DIR ?? defaultDataDir(),
+    dataDir: resolveDataDir(dataDir).dataDir,
     ollamaUrl: process.env.OLLAMA_URL ?? "http://localhost:11434",
     embeddingModel: process.env.RAG_EMBEDDING_MODEL ?? "nomic-embed-text",
     // nomic-embed-text produces 768-dim vectors.
     embeddingDimensions: Number(process.env.RAG_EMBEDDING_DIMS ?? 768),
     chunkSize: Number(process.env.RAG_CHUNK_SIZE ?? 1200),
     chunkOverlap: Number(process.env.RAG_CHUNK_OVERLAP ?? 150),
-    ...overrides,
+    ...rest,
   };
 }

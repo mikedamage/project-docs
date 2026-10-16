@@ -7,6 +7,7 @@ import { mcpCommand } from "../src/cli/mcp.js";
 import { projectsCommand } from "../src/cli/projects.js";
 import { pruneCommand } from "../src/cli/prune.js";
 import { queryCommand } from "../src/cli/query.js";
+import { whereCommand } from "../src/cli/where.js";
 
 /**
  * `project-docs` CLI entrypoint. Registers each command module from src/cli/.
@@ -16,12 +17,20 @@ import { queryCommand } from "../src/cli/query.js";
 async function main(): Promise<void> {
   await yargs(hideBin(process.argv))
     .scriptName("project-docs")
+    .option("data-dir", {
+      type: "string",
+      global: true,
+      describe:
+        "Directory holding the LanceDB store (overrides RAG_DATA_DIR; relative " +
+        "paths resolve against cwd)",
+    })
     .command(ingestCommand)
     .command(pruneCommand)
     .command(queryCommand)
     .command(docsCommand)
     .command(projectsCommand)
     .command(mcpCommand)
+    .command(whereCommand)
     .demandCommand(1, "Specify a command, e.g. `project-docs query ...`")
     .strict()
     .help()

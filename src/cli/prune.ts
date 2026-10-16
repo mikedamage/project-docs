@@ -3,6 +3,8 @@ import { createRag } from "../core/index.js";
 
 interface PruneArgs {
   project: string;
+  /** Global `--data-dir` option, declared in bin/project-docs.ts. */
+  dataDir?: string;
 }
 
 /**
@@ -23,9 +25,9 @@ export const pruneCommand: CommandModule<object, PruneArgs> = {
       describe: "Project id to prune",
     }),
   handler: async (argv) => {
-    const { ingestor } = createRag();
+    const { ingestor, config } = createRag({ dataDir: argv.dataDir });
 
-    console.error(`Pruning "${argv.project}" ...`);
+    console.error(`Pruning "${argv.project}" (store: ${config.dataDir}) ...`);
     const report = await ingestor.prune(argv.project, (file, reason) => {
       console.error(`  - ${file} (${reason})`);
     });

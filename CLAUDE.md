@@ -61,6 +61,7 @@ src/cli/           each file exports a yargs CommandModule (no self-execution)
   projects.ts   projectsCommand
   prune.ts      pruneCommand
   mcp.ts        mcpCommand — runs the MCP server via startMcpServer()
+  where.ts      whereCommand — prints the resolved data dir and its source
 bin/
   project-docs.ts  CLI entrypoint — registers the command modules (npm run cli)
 src/mcp/
@@ -92,7 +93,9 @@ npm run docs   -- --project <id> [--json]           # list indexed files + chunk
 npm run projects                                    # list projects
 npm run projects -- --drop <id>                      # delete a project
 npm run mcp                                          # run the MCP server (stdio); == project-docs mcp
-npm run smoke                                        # end-to-end MCP smoke test
+npm run cli    -- where                              # print the resolved data dir
+npm run cli    -- --data-dir <path> <cmd> ...        # use a non-default store (global flag)
+npm run smoke                                        # end-to-end MCP smoke test (throwaway store)
 ```
 
 The `npm run <cmd>` aliases proxy to `tsx bin/project-docs.ts <cmd>`. You can
@@ -253,12 +256,35 @@ Consequences worth remembering:
   `connect()` creates it (`mkdir -p`) on first use. Override with `RAG_DATA_DIR`.
   Only `ingest`'s relative paths resolve against cwd (pass absolute paths from
   the MCP client).
+- **Data dir precedence is `--data-dir` > `RAG_DATA_DIR` > `XDG_DATA_HOME` >
+  platform default**, all resolved by `resolveDataDir()` in `config.ts`. Empty
+  values count as unset, and relative values are made absolute against cwd at
+  resolve time, so the path printed is the path written. The flag is global in
+  `bin/project-docs.ts`; each command passes `argv.dataDir` into
+  `createRag({ dataDir })`, and `mcp` passes it to `startMcpServer()`. That is why
+  the MCP server builds its `Rag` inside `startMcpServer()` and registers tools in
+  `createServer(rag)`, not at import time: the flag isn't known yet when the
+  module loads. The main use is per-project stores (`<repo>/.project-docs`) for
+  agents whose sandbox only permits writes inside the repo.
+- **CLI and MCP resolve the store independently, so a mismatch fails silently.**
+  The symptom is empty or stale results, not an error. That is why `ingest`,
+  `prune`, `docs`, `projects` and empty `query` results print the store path, and
+  why `ingest_docs` / `prune_docs` / `list_projects` include it. Keep that when
+  adding commands.
+- **Store writability is probed before the first write.** `LanceStore` writes and
+  removes a probe file once per process (`connectForWrite`) before any mutation.
+  Mode bits are not enough: a macOS Seatbelt sandbox denies writes to directories
+  the user owns, and without the probe that shows up mid-ingest as a raw LanceDB
+  IO error (`Operation not permitted`) on a `_transactions` temp file. Reads skip the probe, so an
+  agent can still query a store it cannot write. When `connect()` creates the
+  directory itself, it also drops a `.gitignore` of `*` there, so an in-repo store
+  never needs a `.gitignore` entry.
 
 ## Config (env vars)
 
 | Var                   | Default                  |
 | --------------------- | ------------------------ |
-| `RAG_DATA_DIR`        | OS-native per-user data dir (macOS `~/Library/Application Support/project-docs`, Win `%LOCALAPPDATA%\project-docs`, else `~/.local/share/project-docs`) |
+| `RAG_DATA_DIR`        | OS-native per-user data dir; `--data-dir` overrides (macOS `~/Library/Application Support/project-docs`, Win `%LOCALAPPDATA%\project-docs`, else `~/.local/share/project-docs`) |
 | `OLLAMA_URL`          | `http://localhost:11434` |
 | `RAG_EMBEDDING_MODEL` | `nomic-embed-text`       |
 | `RAG_EMBEDDING_DIMS`  | `768`                    |

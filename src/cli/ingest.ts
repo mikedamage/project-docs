@@ -5,6 +5,8 @@ interface IngestArgs {
   project: string;
   paths: string[];
   force: boolean;
+  /** Global `--data-dir` option, declared in bin/project-docs.ts. */
+  dataDir?: string;
 }
 
 /**
@@ -39,9 +41,9 @@ export const ingestCommand: CommandModule<object, IngestArgs> = {
           `markdown, honouring ${DOCIGNORE_FILE} files)`,
       }),
   handler: async (argv) => {
-    const { ingestor } = createRag();
+    const { ingestor, config } = createRag({ dataDir: argv.dataDir });
 
-    console.error(`Ingesting into "${argv.project}" ...`);
+    console.error(`Ingesting into "${argv.project}" (store: ${config.dataDir}) ...`);
     const report = await ingestor.ingestPaths(argv.project, argv.paths, {
       force: argv.force,
       onProgress: (file, action) => {

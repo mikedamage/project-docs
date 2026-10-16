@@ -3,6 +3,8 @@ import { createRag } from "../core/index.js";
 
 interface ProjectsArgs {
   drop: string | undefined;
+  /** Global `--data-dir` option, declared in bin/project-docs.ts. */
+  dataDir?: string;
 }
 
 /** `projects` command. Lists projects, or deletes one with `--drop`. */
@@ -15,7 +17,8 @@ export const projectsCommand: CommandModule<object, ProjectsArgs> = {
       describe: "Delete the named project and all its indexed docs",
     }),
   handler: async (argv) => {
-    const { store } = createRag();
+    const { store, config } = createRag({ dataDir: argv.dataDir });
+    console.error(`Store: ${config.dataDir}`);
 
     if (argv.drop) {
       await store.dropProject(argv.drop);
