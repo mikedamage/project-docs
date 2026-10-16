@@ -36,7 +36,7 @@ function createServer(rag: Rag): McpServer {
   const server = new McpServer({
     // Matches the package and binary name; keep `version` in sync with package.json.
     name: "project-docs",
-    version: "0.2.2",
+    version: "0.2.3",
   });
 
   server.registerTool(
