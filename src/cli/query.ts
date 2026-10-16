@@ -6,6 +6,8 @@ interface QueryArgs {
   project: string;
   limit: number | undefined;
   json: boolean;
+  /** Global `--data-dir` option, declared in bin/project-docs.ts. */
+  dataDir?: string;
 }
 
 /**
@@ -39,7 +41,7 @@ export const queryCommand: CommandModule<object, QueryArgs> = {
         describe: "Emit raw results as JSON",
       }),
   handler: async (argv) => {
-    const { retriever } = createRag();
+    const { retriever, config } = createRag({ dataDir: argv.dataDir });
     const results = await retriever.search(argv.project, argv.query, { limit: argv.limit });
 
     if (argv.json) {
@@ -48,7 +50,11 @@ export const queryCommand: CommandModule<object, QueryArgs> = {
     }
 
     if (results.length === 0) {
-      console.error(`No results for "${argv.query}" in project "${argv.project}".`);
+      // Name the store: an empty result is the usual symptom of querying a
+      // different store than the one that was ingested into.
+      console.error(
+        `No results for "${argv.query}" in project "${argv.project}" (store: ${config.dataDir}).`,
+      );
       return;
     }
 

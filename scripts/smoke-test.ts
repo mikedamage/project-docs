@@ -2,7 +2,10 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  getDefaultEnvironment,
+  StdioClientTransport,
+} from "@modelcontextprotocol/sdk/client/stdio.js";
 
 /**
  * End-to-end smoke test for the MCP server. Spawns the server over stdio, then:
@@ -11,6 +14,9 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
  *   3. lists its docs,
  *   4. queries it and checks the file comes back,
  *   5. drops the project and confirms it's gone.
+ *
+ * The server runs against a throwaway store in the temp dir (via RAG_DATA_DIR in
+ * its env, as an MCP client config would set it), never the real one.
  *
  * Exercises the full ingest -> embed -> store -> retrieve path, so it needs a
  * running Ollama with the embedding model pulled.
@@ -45,8 +51,13 @@ async function main(): Promise<void> {
   const project = `smoke-test-${Date.now()}`;
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "docrag-smoke-"));
   const docPath = path.join(tmpDir, "guide.md");
+  const storeDir = path.join(tmpDir, "store");
 
-  const transport = new StdioClientTransport({ command: "npx", args: ["tsx", serverPath] });
+  const transport = new StdioClientTransport({
+    command: "npx",
+    args: ["tsx", serverPath],
+    env: { ...getDefaultEnvironment(), RAG_DATA_DIR: storeDir },
+  });
   const client = new Client({ name: "smoke-test", version: "0.1.0" });
 
   await client.connect(transport);
@@ -63,6 +74,7 @@ async function main(): Promise<void> {
     const ingestOut = await callTool(client, "ingest_docs", { project, paths: [docPath] });
     console.log(`\ningest_docs ->\n${ingestOut}`);
     assert(ingestOut.includes("1 ingested"), `expected "1 ingested", got:\n${ingestOut}`);
+    assert(ingestOut.includes(storeDir), `expected the server to use RAG_DATA_DIR ${storeDir}`);
 
     // 3. List docs
     const docsOut = await callTool(client, "list_docs", { project });

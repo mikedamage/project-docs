@@ -1,4 +1,5 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, unlink, writeFile } from "node:fs/promises";
+import path from "node:path";
 import * as lancedb from "@lancedb/lancedb";
 import type { RagConfig } from "./config.js";
 import type { EmbeddedChunk, IndexedFile, IndexedFileState, SearchResult } from "./types.js";
@@ -53,6 +54,8 @@ export class LanceStore implements VectorStore {
   private db: lancedb.Connection | null = null;
   /** Tables already known to carry the `forced` column (see `migrate`). */
   private readonly migrated = new Set<string>();
+  /** Set once `connectForWrite` has proven the data dir accepts writes. */
+  private writable = false;
 
   constructor(config: RagConfig) {
     this.dataDir = config.dataDir;
@@ -62,10 +65,48 @@ export class LanceStore implements VectorStore {
     if (!this.db) {
       // Ensure the data dir exists (default is ~/.local/share/project-docs,
       // which won't exist on a fresh machine). mkdir -p is a no-op if present.
-      await mkdir(this.dataDir, { recursive: true });
+      let created: string | undefined;
+      try {
+        created = await mkdir(this.dataDir, { recursive: true });
+      } catch (err) {
+        throw this.accessError("cannot be created", err);
+      }
+      // A store we create ignores itself, so a project-local data dir (e.g.
+      // <repo>/.project-docs) never needs a .gitignore entry. Best-effort.
+      if (created) await writeFile(path.join(this.dataDir, ".gitignore"), "*\n").catch(() => {});
       this.db = await lancedb.connect(this.dataDir);
     }
     return this.db;
+  }
+
+  /**
+   * `connect()` for operations that write. Probes once per process with a real
+   * file write, because a sandbox (e.g. macOS Seatbelt) can deny writes to a
+   * directory that looks writable by its mode bits — without the probe that
+   * surfaces mid-ingest as a raw LanceDB IO error on a `_transactions` temp file.
+   */
+  private async connectForWrite(): Promise<lancedb.Connection> {
+    const db = await this.connect();
+    if (!this.writable) {
+      const probe = path.join(this.dataDir, `.write-probe-${process.pid}`);
+      try {
+        await writeFile(probe, "");
+        await unlink(probe);
+      } catch (err) {
+        throw this.accessError("is not writable", err);
+      }
+      this.writable = true;
+    }
+    return db;
+  }
+
+  private accessError(problem: string, cause: unknown): Error {
+    const code = (cause as NodeJS.ErrnoException).code;
+    return new Error(
+      `Data dir ${this.dataDir} ${problem}${code ? ` (${code})` : ""}. ` +
+        "Point --data-dir or RAG_DATA_DIR at a writable directory.",
+      { cause },
+    );
   }
 
   /**
@@ -107,7 +148,7 @@ export class LanceStore implements VectorStore {
 
   async replaceFile(project: string, file: string, chunks: EmbeddedChunk[]): Promise<void> {
     if (chunks.length === 0) return;
-    const db = await this.connect();
+    const db = await this.connectForWrite();
     const name = this.tableName(project);
     const rows: Row[] = chunks.map((c) => ({
       id: c.id,
@@ -131,6 +172,7 @@ export class LanceStore implements VectorStore {
   }
 
   async deleteFile(project: string, file: string): Promise<void> {
+    await this.connectForWrite();
     const table = await this.openTable(project);
     if (!table) return;
     await table.delete(`file = ${sqlString(file)}`);
@@ -151,6 +193,7 @@ export class LanceStore implements VectorStore {
   }
 
   async setForced(project: string, file: string, forced: boolean): Promise<void> {
+    await this.connectForWrite();
     const table = await this.openTable(project);
     if (!table) return;
     await table.update({ where: `file = ${sqlString(file)}`, values: { forced } });
@@ -199,7 +242,7 @@ export class LanceStore implements VectorStore {
   }
 
   async dropProject(project: string): Promise<void> {
-    const db = await this.connect();
+    const db = await this.connectForWrite();
     const name = this.tableName(project);
     const names = await db.tableNames();
     if (names.includes(name)) await db.dropTable(name);

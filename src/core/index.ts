@@ -5,7 +5,12 @@ import { Retriever } from "./retriever.js";
 import { LanceStore, type VectorStore } from "./store.js";
 
 export * from "./types.js";
-export { loadConfig, type RagConfig } from "./config.js";
+export {
+  loadConfig,
+  resolveDataDir,
+  type DataDirSource,
+  type RagConfig,
+} from "./config.js";
 export { type Embedder, OllamaEmbedder } from "./embedder.js";
 export { type VectorStore, LanceStore } from "./store.js";
 export {

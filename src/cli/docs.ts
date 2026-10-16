@@ -4,6 +4,8 @@ import { createRag } from "../core/index.js";
 interface DocsArgs {
   project: string;
   json: boolean;
+  /** Global `--data-dir` option, declared in bin/project-docs.ts. */
+  dataDir?: string;
 }
 
 /** `docs` command. Lists the source files indexed for a project, with chunk counts. */
@@ -24,7 +26,8 @@ export const docsCommand: CommandModule<object, DocsArgs> = {
         describe: "Emit raw results as JSON",
       }),
   handler: async (argv) => {
-    const { store } = createRag();
+    const { store, config } = createRag({ dataDir: argv.dataDir });
+    console.error(`Store: ${config.dataDir}`);
     const files = await store.listFiles(argv.project);
 
     if (argv.json) {
