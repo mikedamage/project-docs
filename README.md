@@ -107,7 +107,7 @@ in an `[mcp_servers.project-docs.env]` table, or via `--env KEY=VALUE` on
 registry on a cold cache — that shows up as MCP-client startup latency and fails
 outright offline. Two ways to make startup deterministic:
 
-- **Pin the version:** `npx -y project-docs@0.2.2 mcp` — cached after
+- **Pin the version:** `npx -y project-docs@0.2.3 mcp` — cached after
   the first run, and an upstream release can't change what your client launches.
 - **Install globally and drop npx** — `npm install -g project-docs`,
   then use `command = "project-docs"` with `args = ["mcp"]` (Claude Code:
